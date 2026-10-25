@@ -7,7 +7,7 @@ from fastapi import APIRouter, Request, HTTPException, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 from .siwc import auth, AuthError
-from .local_security import security, check_host, check_extension_origin, require_extension, LOCAL_ORIGIN
+from .local_security import security, check_host, check_extension_origin, require_extension, LOCAL_ORIGIN, check_local_browser_request
 
 router = APIRouter()
 _sessions = {}
@@ -20,30 +20,11 @@ HEADERS = {
 
 
 def _loopback(request):
-    check_host(request)
-    origin = request.headers.get("origin")
-    if origin and origin != LOCAL_ORIGIN:
-        raise HTTPException(status_code=403, detail="Cross-origin request blocked")
-    referer = request.headers.get("referer")
-    if referer and not referer.startswith(LOCAL_ORIGIN + "/"):
-        raise HTTPException(status_code=403, detail="Cross-site referer blocked")
-    if request.headers.get("sec-fetch-site") == "cross-site":
-        raise HTTPException(status_code=403, detail="Cross-site request blocked")
+    check_local_browser_request(request)
 
 
 def _settings_page_access(request: Request):
-    """Allow top-level navigation to safe GET /settings from external pages.
-
-    Fetch Metadata marks user-clicked links from ChatGPT and other sites as
-    cross-site. They are not cross-site API/form submissions. Keep _loopback
-    strict for settings mutations, authenticated GETs and other requests.
-    """
-    check_host(request)
-    if (request.method == "GET"
-            and request.headers.get("sec-fetch-mode") == "navigate"
-            and request.headers.get("sec-fetch-dest") == "document"):
-        return
-    _loopback(request)
+    check_local_browser_request(request, allow_navigation=True)
 
 
 def _record(request, csrf=None, admin=True):
@@ -54,6 +35,14 @@ def _record(request, csrf=None, admin=True):
     if csrf is not None and not secrets.compare_digest(csrf, record["csrf"]):
         raise HTTPException(status_code=403, detail="Invalid CSRF token")
     if admin and not record["admin"]:
+        raise HTTPException(status_code=403, detail="Unlock local Settings first")
+    return record
+
+
+def _record_session_only(request):
+    """Read-only browser navigation: session auth, not mutating CSRF validation."""
+    record = _sessions.get(request.cookies.get("manga_session"))
+    if not record or record["expires"] < time.monotonic() or not record["admin"]:
         raise HTTPException(status_code=403, detail="Unlock local Settings first")
     return record
 
@@ -182,7 +171,9 @@ async def auth_callback(request: Request, code: str | None = None, state: str | 
 
 @router.get("/auth/models")
 async def auth_models(request: Request):
-    _record(request)
+    # Authenticated read-only top-level navigation may originate from a link.
+    _settings_page_access(request)
+    _record_session_only(request)
     try:
         return {"models": await auth.models()}
     except AuthError as exc:

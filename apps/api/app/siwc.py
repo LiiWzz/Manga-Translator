@@ -50,6 +50,7 @@ class Attempt:
     redirect_uri: str
     expires_at: float
     expected_subject: str | None
+    session_id: str | None = None
 
 
 def pkce_challenge(verifier: str) -> str:
@@ -60,7 +61,10 @@ class ChatGPTAuth:
     def __init__(self, store: CredentialStore | None = None, transport=None):
         self.store = store or CredentialStore()
         self.transport = transport
-        self.pending: Attempt | None = None
+        self.pending: Attempt | None = None  # compatibility: latest attempt for tests only
+        self.attempts: dict[str, Attempt] = {}
+        import threading
+        self.attempt_lock = threading.RLock()
         self.lock = asyncio.Lock()
 
     def _http(self):
@@ -77,7 +81,7 @@ class ChatGPTAuth:
                 "email": saved.get("email"),
                 "model": saved.get("selected_model")}
 
-    def start(self, reconnect=False):
+    def start(self, reconnect=False, session_id=None):
         saved = self.store.load() if reconnect else None
         if reconnect and (not saved or not saved.get("client_id")):
             raise AuthError("No saved ChatGPT account to reconnect")
@@ -85,9 +89,15 @@ class ChatGPTAuth:
         nonce = secrets.token_urlsafe(32)
         state = secrets.token_urlsafe(32)
         client_id = saved["client_id"] if saved else "dynamic_agent_client"
-        self.pending = Attempt(state, nonce, verifier, client_id, REDIRECT_URI,
-                               time.monotonic() + PENDING_SECONDS,
-                               saved.get("subject") if saved else None)
+        attempt = Attempt(state, nonce, verifier, client_id, REDIRECT_URI,
+                          time.monotonic() + PENDING_SECONDS,
+                          saved.get("subject") if saved else None, session_id)
+        with self.attempt_lock:
+            self.attempts = {k: v for k, v in self.attempts.items() if v.expires_at > time.monotonic()}
+            if len(self.attempts) >= 32:
+                raise AuthError("Too many pending authorization attempts")
+            self.attempts[state] = attempt
+            self.pending = attempt
         params = {
             "client_id": client_id,
             "redirect_uri": REDIRECT_URI,
@@ -108,13 +118,20 @@ class ChatGPTAuth:
             # Do not expose an id_token_hint in the browser URL for this POC.
         return AUTHORIZATION_ENDPOINT + "?" + urlencode(params)
 
-    def _consume_attempt(self, state: str | None):
-        attempt, self.pending = self.pending, None
-        if (not attempt or not state or
-                time.monotonic() > attempt.expires_at or
-                not hmac.compare_digest(state, attempt.state)):
-            raise AuthError("Invalid or expired sign-in state")
-        return attempt
+    def _consume_attempt(self, state: str | None, session_id=None):
+        with self.attempt_lock:
+            if not isinstance(state, str) or len(state) > 256:
+                raise AuthError("Invalid or expired sign-in state")
+            attempt = self.attempts.get(state)
+            if (not attempt or time.monotonic() > attempt.expires_at or
+                    (attempt.session_id is not None and
+                     (session_id is None or not hmac.compare_digest(attempt.session_id, session_id)))):
+                raise AuthError("Invalid or expired sign-in state")
+            # State checked first, then consumed under the same lock. Replays fail.
+            del self.attempts[state]
+            if self.pending and self.pending.state == state:
+                self.pending = None
+            return attempt
 
     async def _validate_id_token(self, token: str, client_id: str, nonce: str):
         header = jwt.get_unverified_header(token)
@@ -138,9 +155,9 @@ class ChatGPTAuth:
         return claims
 
     async def callback(self, code: str | None, state: str | None,
-                       client_id: str | None, error: str | None):
+                       client_id: str | None, error: str | None, session_id=None):
         # State must be checked even for denied consent; consume transaction once.
-        attempt = self._consume_attempt(state)
+        attempt = self._consume_attempt(state, session_id)
         if error:
             raise AuthError("ChatGPT sign-in declined or cancelled")
         if not code:

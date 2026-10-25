@@ -1,0 +1,118 @@
+"""Security regression contract for v0.3.1 local-only POC."""
+import asyncio
+import io
+import secrets
+import time
+from fastapi.testclient import TestClient
+from app.main import app
+from app import oauth_routes, siwc
+from app.local_security import LocalSecurity
+from app.siwc_store import CredentialStore
+
+HOST = "http://127.0.0.1:8000"
+
+def local_client():
+    return TestClient(app, base_url=HOST)
+
+def admin_session(monkeypatch, tmp_path):
+    sec = LocalSecurity(CredentialStore(tmp_path))
+    key = sec.initialize()
+    monkeypatch.setattr(oauth_routes, "security", sec)
+    client = local_client()
+    response = client.get("/settings")
+    assert "Settings locked" in response.text
+    csrf = response.text.split('name="csrf" value="')[1].split('"')[0]
+    assert client.post("/auth/unlock", data={"csrf": csrf, "key": key}, follow_redirects=False).status_code == 303
+    return sec, client, csrf
+
+def test_unpaired_requests_rejected_before_image_processing(monkeypatch):
+    from app import main
+    def fail(*args, **kwargs): raise AssertionError("OCR must never be called")
+    monkeypatch.setattr(main, "extract_regions", fail)
+    client = local_client()
+    for path in ("/api/v1/translate", "/api/v1/translate-rendered"):
+        response = client.post(path, files={"file": ("a.png", b"not image", "image/png")})
+        assert response.status_code == 401
+    assert client.get("/api/v1/provider/status").status_code == 401
+
+def test_untrusted_host_and_origin():
+    client = local_client()
+    assert client.post("/api/v1/translate", headers={"host": "attacker.test"}).status_code == 403
+    assert client.post("/api/v1/translate", headers={"origin": "https://attacker.test"}).status_code == 403
+    assert client.post("/api/v1/pair/redeem", json={"code": "fake"}, headers={"origin": "https://attacker.test"}).status_code == 403
+
+def test_settings_require_admin_and_csrf(monkeypatch, tmp_path):
+    sec = LocalSecurity(CredentialStore(tmp_path))
+    key = sec.initialize()
+    monkeypatch.setattr(oauth_routes, "security", sec)
+    client = local_client()
+    p = client.get("/settings")
+    csrf = p.text.split('name="csrf" value="')[1].split('"')[0]
+    assert client.get("/auth/models").status_code == 403
+    assert client.post("/auth/start", data={"csrf": csrf}, follow_redirects=False).status_code == 403
+    assert client.post("/auth/pair", data={"csrf": csrf}, follow_redirects=False).status_code == 403
+    assert client.post("/auth/unlock", data={"csrf": "bad", "key": key}).status_code == 403
+    assert client.post("/auth/unlock", data={"csrf": csrf, "key": key}, headers={"origin": "https://evil.test"}).status_code == 403
+    assert client.post("/auth/unlock", data={"csrf": csrf, "key": key}, follow_redirects=False).status_code == 303
+    assert client.post("/auth/pair", data={"csrf": "bad"}, follow_redirects=False).status_code == 403
+    assert client.post("/auth/pair", data={"csrf": csrf}, follow_redirects=False).status_code == 200
+
+def test_pairing_single_use_revocation_and_wrong_code(tmp_path):
+    sec = LocalSecurity(CredentialStore(tmp_path))
+    sec.initialize()
+    code = sec.issue_pairing()
+    assert not sec.verify_capability("Bearer " + code)
+    try:
+        sec.redeem("wrong")
+        assert False
+    except Exception: pass
+    token = sec.redeem(code)
+    assert sec.verify_capability("Bearer " + token)
+    try:
+        sec.redeem(code)
+        assert False
+    except Exception: pass
+    sec.revoke()
+    assert not sec.verify_capability("Bearer " + token)
+
+def test_pairing_expired(tmp_path):
+    sec = LocalSecurity(CredentialStore(tmp_path))
+    sec.initialize()
+    code = sec.issue_pairing()
+    sec.store._write("extension-pairing.json", {"hash": sec.store._read("extension-pairing.json")["hash"], "expires": time.time()-1})
+    from fastapi import HTTPException
+    try:
+        sec.redeem(code)
+        assert False
+    except HTTPException as exc:
+        assert exc.status_code == 403
+
+def test_multiple_oauth_attempts_wrong_state_and_atomic_replay(tmp_path):
+    auth = siwc.ChatGPTAuth(CredentialStore(tmp_path))
+    auth.start(session_id="A")
+    a = auth.pending.state
+    auth.start(session_id="B")
+    b = auth.pending.state
+    assert a != b
+    from pytest import raises
+    with raises(siwc.AuthError):
+        auth._consume_attempt("bogus", session_id="A")
+    assert a in auth.attempts and b in auth.attempts
+    with raises(siwc.AuthError):
+        auth._consume_attempt(a, session_id="B")
+    assert a in auth.attempts
+    assert auth._consume_attempt(a, session_id="A").state == a
+    with raises(siwc.AuthError):
+        auth._consume_attempt(a, session_id="A")
+    assert auth._consume_attempt(b, session_id="B").state == b
+
+def test_oauth_bounded_storage_and_expiry(tmp_path):
+    auth = siwc.ChatGPTAuth(CredentialStore(tmp_path))
+    for _ in range(32): auth.start(session_id="A")
+    from pytest import raises
+    with raises(siwc.AuthError, match="Too many"): auth.start(session_id="A")
+    expired = next(iter(auth.attempts))
+    from dataclasses import replace
+    auth.attempts[expired] = replace(auth.attempts[expired], expires_at=time.monotonic()-1)
+    with raises(siwc.AuthError): auth._consume_attempt(expired, session_id="A")
+    auth.start(session_id="A")

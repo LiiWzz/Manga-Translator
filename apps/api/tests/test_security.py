@@ -156,10 +156,48 @@ def test_cross_site_settings_subresource_and_mutations_are_denied():
     assert client.get("/settings", headers={**base, "sec-fetch-mode": "cors",
                                              "sec-fetch-dest": "empty"}).status_code == 403
     assert client.get("/auth/models", headers={**base, "sec-fetch-mode": "navigate",
-                                                "sec-fetch-dest": "document"}).status_code == 403
+                                                "sec-fetch-dest": "document"}).status_code == 403  # no admin session
     assert client.post("/auth/unlock", data={"csrf": "fake", "key": "fake"},
                        headers={**base, "sec-fetch-mode": "navigate",
                                 "sec-fetch-dest": "document"}).status_code == 403
     assert client.get("/settings", headers={**base, "host": "evil.example",
                                             "sec-fetch-mode": "navigate",
                                             "sec-fetch-dest": "document"}).status_code == 403
+
+
+def test_owner_route_policy_matrix(monkeypatch, tmp_path):
+    """Every owner route: top-level GET navigation vs cross-site mutation."""
+    sec, client, csrf = admin_session(monkeypatch, tmp_path)
+    headers_nav = {"sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate",
+                   "sec-fetch-dest": "document", "referer": "https://chatgpt.com/"}
+    # Authentication remains mandatory, but a top-level navigation may open an admin read.
+    async def models(): return []
+    monkeypatch.setattr(oauth_routes.auth, "models", models)
+    assert client.get("/auth/models", headers=headers_nav).status_code == 200
+    assert client.get("/settings", headers=headers_nav).status_code == 200
+    assert client.get("/auth/models", headers={**headers_nav, "host": "evil.example"}).status_code == 403
+    # A cross-site POST is never a permitted navigation, even with admin cookie and CSRF.
+    for path in ("/auth/unlock", "/auth/start", "/auth/reconnect",
+                 "/auth/model", "/auth/logout", "/auth/pair", "/auth/pair/revoke"):
+        assert client.post(path, data={"csrf": csrf},
+                           headers=headers_nav, follow_redirects=False).status_code == 403
+        assert client.post(path, data={"csrf": csrf},
+                           headers={"origin": "http://127.0.0.1:9000"},
+                           follow_redirects=False).status_code == 403
+        assert client.post(path, data={"csrf": csrf},
+                           headers={"sec-fetch-site": "same-site"},
+                           follow_redirects=False).status_code == 403
+    # Non-navigation cross-site fetch cannot read the authenticated model list.
+    assert client.get("/auth/models", headers={"sec-fetch-site": "cross-site",
+                      "sec-fetch-mode": "cors", "sec-fetch-dest": "empty"}).status_code == 403
+
+
+def test_extension_apis_never_use_navigation_exemption():
+    c = local_client()
+    navigation = {"sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate",
+                  "sec-fetch-dest": "document"}
+    assert c.get("/api/v1/provider/status", headers=navigation).status_code == 403
+    assert c.post("/api/v1/pair/redeem", json={"code": "invalid"},
+                  headers=navigation).status_code == 403
+    assert c.post("/api/v1/translate", headers=navigation).status_code == 403
+    assert c.post("/api/v1/translate-rendered", headers=navigation).status_code == 403

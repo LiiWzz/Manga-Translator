@@ -13,28 +13,31 @@ def picture():
     return out.getvalue()
 
 def test_reader_translation_is_non_destructive(monkeypatch):
-    from app import main
-    monkeypatch.setattr(main,"extract_regions",lambda _: [([35,35,90,25],"HELLO",.93)])
-    captured=[]
-    async def fake(texts,context=""):
-        captured.append((texts,context))
-        return ["สวัสดี"]
-    monkeypatch.setattr(main,"translate_texts",fake)
-    app.dependency_overrides[require_extension]=lambda:None
+    from app import reader_vision
+    captured = []
+    async def fake(image, context=""):
+        captured.append(context)
+        return [{"source_text": "ELDER, DOESN'T THE YOUNG LEADER SEEM EVEN MORE IMPRESSIVE NOW?",
+                 "translated_text": "ท่านผู้อาวุโส ท่านผู้นำหนุ่มดูน่าประทับใจยิ่งกว่าเดิมไหม?",
+                 "bbox": None, "confidence": None}]
+    monkeypatch.setattr(reader_vision, "translate_image", fake)
+    app.dependency_overrides[require_extension] = lambda: None
     try:
-        c=TestClient(app,base_url="http://127.0.0.1:8000")
-        r=c.post("/api/v1/reader/translate",
-                 data={"context":"previous dialogue"},
-                 files={"file":("page.png",picture(),"image/png")})
-        assert r.status_code==200,r.text
-        data=r.json()
-        assert data["regions"][0]["translated_text"]=="สวัสดี"
+        c = TestClient(app, base_url="http://127.0.0.1:8000")
+        r = c.post("/api/v1/reader/translate",
+                   data={"context": "previous dialogue"},
+                   files={"file": ("page.png", picture(), "image/png")})
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert len(data["regions"]) == 1
+        assert data["reader_mode"] == "vision-first"
         assert "overlay_data_url" not in data
-        assert captured==[(["HELLO"],"previous dialogue")]
-        assert c.post("/api/v1/reader/translate",data={"context":"a"*1501},
-                      files={"file":("page.png",picture(),"image/png")}).status_code==422
+        assert captured == ["previous dialogue"]
+        assert c.post("/api/v1/reader/translate", data={"context": "a" * 1501},
+                      files={"file": ("page.png", picture(), "image/png")}).status_code == 422
     finally:
-        app.dependency_overrides.pop(require_extension,None)
+        app.dependency_overrides.pop(require_extension, None)
+
 
 def test_reader_requires_pairing():
     c=TestClient(app,base_url="http://127.0.0.1:8000")

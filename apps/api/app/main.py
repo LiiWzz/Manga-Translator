@@ -10,7 +10,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel
 
 from .bubble_renderer import TextRegion, overlay_data_url, render_translations
-from .ocr_grouping import extract_grouped_regions
+from .ocr_grouping import extract_grouped_regions, analyze_regions, diagnostic_packet
 from .oauth_routes import router as oauth_router
 from .provider_adapter import translate_chatgpt
 from .local_security import require_extension
@@ -39,7 +39,8 @@ class RenderResponse(TranslateResponse):
     overlay_data_url: str
     applied_regions: int
     skipped: list[dict]
-    render_mode: str = "flat-bubble-overlay"
+    render_mode: str = "safe-flat-block-overlay"
+    diagnostics: dict | None = None
 
 
 def extract_regions(image: Image.Image):
@@ -125,14 +126,22 @@ async def translate(file: UploadFile = File(...), gate=Depends(require_extension
 
 
 @app.post("/api/v1/translate-rendered",response_model=RenderResponse)
-async def translate_rendered(file: UploadFile = File(...), gate=Depends(require_extension)):
+async def translate_rendered(file: UploadFile = File(...), debug: bool = False, gate=Depends(require_extension)):
     image,source,translations,regions = await _process(file)
     try:
         overlay,applied,skipped = render_translations(
             image,[TextRegion(tuple(box),txt,confidence) for box,txt,confidence in source],translations)
     except RuntimeError as exc:
         raise HTTPException(status_code=503,detail=str(exc)) from exc
+    diagnostic = None
+    if debug:
+        # Reuse translated OCR regions without re-running expensive OCR.
+        from .ocr_grouping import OCRAnalysis
+        diagnostic = diagnostic_packet(OCRAnalysis(
+            [TextRegion(tuple(box), txt, confidence) for box, txt, confidence in source],
+            [TextRegion(tuple(box), txt, confidence) for box, txt, confidence in source], []))
+        diagnostic["skipped"] = skipped
     return RenderResponse(image_width=image.width,image_height=image.height,regions=regions,
                           provider=os.getenv("TRANSLATOR_PROVIDER","chatgpt_oauth"),
                           overlay_data_url=overlay_data_url(overlay),
-                          applied_regions=applied,skipped=skipped)
+                          applied_regions=applied,skipped=skipped,diagnostics=diagnostic)

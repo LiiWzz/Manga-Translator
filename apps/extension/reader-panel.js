@@ -54,6 +54,7 @@ async function scan() {
   try {
     const [tab] = await chrome.tabs.query({active:true,currentWindow:true});
     if (!tab?.id || !/^https?:/.test(tab.url || "")) throw new Error("เปิดหน้ามังงะก่อน");
+    await chrome.scripting.executeScript({target:{tabId:tab.id},files:["reader-content.js"]});
     const images = await chrome.tabs.sendMessage(tab.id, {type:"MANGA_READER_DISCOVER"});
     if (!Array.isArray(images) || !images.length) throw new Error("ไม่พบภาพที่โหลดแล้วในบริเวณหน้าจอ");
     for (let i = 0; i < images.length; i++) {

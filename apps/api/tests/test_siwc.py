@@ -111,3 +111,45 @@ def test_logout_bad_discovery_clears_tokens(tmp_path):
     result = asyncio.run(auth.logout())
     assert result["remote_revocation_confirmed"] is False
     assert "refresh_token" not in auth.store.load()
+
+
+def test_settings_form_submits_valid_csrf_and_starts_oauth(monkeypatch):
+    """Regression: the HTML must contain the actual CSRF token, not +csrf+."""
+    from html.parser import HTMLParser
+    from app import oauth_routes
+
+    class FormInspector(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.forms = {}
+            self.action = None
+
+        def handle_starttag(self, tag, attrs):
+            attrs = dict(attrs)
+            if tag == "form":
+                self.action = attrs.get("action")
+            elif tag == "input" and self.action and attrs.get("name") == "csrf":
+                self.forms[self.action] = attrs.get("value")
+
+        def handle_endtag(self, tag):
+            if tag == "form":
+                self.action = None
+
+    client = TestClient(app, base_url="http://127.0.0.1:8000")
+    page = client.get("/settings")
+    assert page.status_code == 200
+    inspector = FormInspector()
+    inspector.feed(page.text)
+    assert set(inspector.forms) == {"/auth/start", "/auth/reconnect", "/auth/model", "/auth/logout"}
+    tokens = set(inspector.forms.values())
+    assert len(tokens) == 1
+    token = tokens.pop()
+    assert token and token != "+csrf+" and len(token) > 30
+
+    monkeypatch.setattr(oauth_routes.auth, "start", lambda reconnect=False: "https://auth.openai.com/test")
+    response = client.post("/auth/start", data={"csrf": token}, follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "https://auth.openai.com/test"
+
+    rejected = client.post("/auth/start", data={"csrf": "invalid"}, follow_redirects=False)
+    assert rejected.status_code == 403

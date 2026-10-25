@@ -48,30 +48,46 @@ def _new_session():
 
 
 def _page(csrf, status):
-    email = html.escape(status.get("email") or "Not connected")
-    model = html.escape(status.get("model") or "(none)")
+    """Render a simple localhost settings form with an escaped CSRF token."""
+    from string import Template
+
+    email = html.escape(status.get("email") or "Not connected", quote=True)
+    model = html.escape(status.get("model") or "(none)", quote=True)
     state = "Connected" if status.get("connected") else "Not connected"
     consent = "Yes" if status.get("plan_usage_enabled") else "No"
-    return """<!doctype html><html><head><meta charset="utf-8"><title>Manga Translator - ChatGPT</title>
+    csrf_value = html.escape(csrf, quote=True)
+
+    template = Template("""<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><title>Manga Translator - ChatGPT</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<style>body{font:16px/1.5 system-ui;max-width:740px;margin:32px auto;padding:0 20px;background:#101218;color:#eee}
+<style>
+body{font:16px/1.5 system-ui;max-width:740px;margin:32px auto;padding:0 20px;background:#101218;color:#eee}
 a{color:#9bd1ff}button{padding:9px 15px;margin:6px;cursor:pointer}
-input{padding:9px;width:80%;max-width:470px}section{padding:15px;background:#222733;border-radius:12px;margin:12px 0}</style>
-</head><body><h1>Manga Translator / ChatGPT</h1>
-<section><p>Session: <b>""" + state + """</b></p><p>Account: """+email+"""</p>
-<p>ChatGPT plan permission: """+consent+"""</p><p>Selected model: """+model+"""</p></section>
-<form method="post" action="/auth/start"><input type="hidden" name="csrf" value=""""+csrf+"""">
+input{padding:9px;width:80%;max-width:470px}
+section{padding:15px;background:#222733;border-radius:12px;margin:12px 0}
+</style></head><body>
+<h1>Manga Translator / ChatGPT</h1>
+<section><p>Session: <b>$state</b></p><p>Account: $email</p>
+<p>ChatGPT plan permission: $consent</p><p>Selected model: $model</p></section>
+<form method="post" action="/auth/start">
+<input type="hidden" name="csrf" value="$csrf">
 <button type="submit">Continue with ChatGPT</button></form>
-<form method="post" action="/auth/reconnect"><input type="hidden" name="csrf" value=""""+csrf+"""">
+<form method="post" action="/auth/reconnect">
+<input type="hidden" name="csrf" value="$csrf">
 <button type="submit">Reconnect saved account</button></form>
-<form method="post" action="/auth/model"><input type="hidden" name="csrf" value=""""+csrf+"""">
-<label>Model slug from /auth/models <input name="slug" placeholder="Choose available model slug" required></label>
+<form method="post" action="/auth/model">
+<input type="hidden" name="csrf" value="$csrf">
+<label>Model slug from /auth/models
+<input name="slug" placeholder="Choose available model slug" required></label>
 <button type="submit">Save model</button></form>
 <p><a href="/auth/models">Available account models (JSON)</a></p>
-<form method="post" action="/auth/logout"><input type="hidden" name="csrf" value=""""+csrf+"""">
+<form method="post" action="/auth/logout">
+<input type="hidden" name="csrf" value="$csrf">
 <button type="submit">Disconnect locally and request token revocation</button></form>
 <p>These settings run on your own computer. Never paste tokens into this UI.</p>
-</body></html>"""
+</body></html>""")
+    return template.substitute(state=state, email=email, consent=consent,
+                               model=model, csrf=csrf_value)
 
 
 @router.get("/settings", response_class=HTMLResponse)

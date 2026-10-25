@@ -100,7 +100,7 @@ async def settings(request: Request):
     else:
         sid, csrf = _new_session()
     response = HTMLResponse(_page(csrf, auth.status()),
-        headers={"Cache-Control": "no-store", "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'", "X-Frame-Options": "DENY"})
+        headers={"Cache-Control": "no-store", "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://auth.openai.com; base-uri 'none'; frame-ancestors 'none'", "X-Frame-Options": "DENY"})
     response.set_cookie("manga_session", sid, httponly=True, samesite="strict", secure=False, path="/")
     return response
 

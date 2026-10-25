@@ -153,3 +153,18 @@ def test_settings_form_submits_valid_csrf_and_starts_oauth(monkeypatch):
 
     rejected = client.post("/auth/start", data={"csrf": "invalid"}, follow_redirects=False)
     assert rejected.status_code == 403
+
+
+def test_oauth_csp_allows_only_openai_redirect_origin():
+    """Chrome rechecks form-action after the POST /auth/start 303 redirect."""
+    client = TestClient(app, base_url="http://127.0.0.1:8000")
+    response = client.get("/settings")
+    assert response.status_code == 200
+    csp = response.headers["content-security-policy"]
+    assert "form-action 'self' https://auth.openai.com;" in csp
+    assert "default-src 'none'" in csp
+    assert "base-uri 'none'" in csp
+    assert "frame-ancestors 'none'" in csp
+    assert "form-action *" not in csp
+    assert "http://auth.openai.com" not in csp
+    assert "'unsafe-eval'" not in csp

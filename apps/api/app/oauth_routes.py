@@ -3,7 +3,7 @@ import html
 import secrets
 import time
 from string import Template
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 from .siwc import auth, AuthError
@@ -235,7 +235,6 @@ class ExtensionAuthStatus(BaseModel):
 
 
 @router.get("/api/v1/provider/status", response_model=ExtensionAuthStatus)
-async def provider_status(request: Request):
-    require_extension(request)
+async def provider_status(request: Request, gate=Depends(require_extension)):
     result = auth.status()
     return {key: result[key] for key in ("connected", "plan_usage_enabled", "model")}

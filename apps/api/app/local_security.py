@@ -22,6 +22,8 @@ class LocalSecurity:
         self.store = store or CredentialStore()
         self.lock = threading.RLock()
         self.failures = []
+        self.requests = []
+        self.inflight = 0
 
     def initialized(self):
         return bool(self.store._read("local-admin.json"))
@@ -135,6 +137,18 @@ def require_extension(request: Request):
     check_extension_origin(request)
     if not security.verify_capability(request.headers.get("authorization")):
         raise HTTPException(status_code=401, detail="Pair the extension before translating")
+    with security.lock:
+        now = time.monotonic()
+        security.requests = [t for t in security.requests if now - t < 60]
+        if len(security.requests) >= 12 or security.inflight >= 2:
+            raise HTTPException(status_code=429, detail="Local translation budget exceeded")
+        security.requests.append(now)
+        security.inflight += 1
+    try:
+        yield
+    finally:
+        with security.lock:
+            security.inflight -= 1)
 
 
 if __name__ == "__main__":

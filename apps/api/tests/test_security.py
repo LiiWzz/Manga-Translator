@@ -138,3 +138,28 @@ def test_settings_referrer_policy_allows_browser_origin_for_unlock(monkeypatch, 
         denied = client.post("/auth/unlock", data={"csrf": csrf, "key": key},
                              headers={"origin": origin}, follow_redirects=False)
         assert denied.status_code == 403
+
+
+def test_external_top_level_navigation_to_settings_is_allowed():
+    client = local_client()
+    response = client.get("/settings", headers={
+        "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate",
+        "sec-fetch-dest": "document", "referer": "https://chatgpt.com/"})
+    assert response.status_code == 200
+    assert "Settings" in response.text
+    assert "no-store" in response.headers["cache-control"]
+
+
+def test_cross_site_settings_subresource_and_mutations_are_denied():
+    client = local_client()
+    base = {"sec-fetch-site": "cross-site", "referer": "https://evil.example/"}
+    assert client.get("/settings", headers={**base, "sec-fetch-mode": "cors",
+                                             "sec-fetch-dest": "empty"}).status_code == 403
+    assert client.get("/auth/models", headers={**base, "sec-fetch-mode": "navigate",
+                                                "sec-fetch-dest": "document"}).status_code == 403
+    assert client.post("/auth/unlock", data={"csrf": "fake", "key": "fake"},
+                       headers={**base, "sec-fetch-mode": "navigate",
+                                "sec-fetch-dest": "document"}).status_code == 403
+    assert client.get("/settings", headers={**base, "host": "evil.example",
+                                            "sec-fetch-mode": "navigate",
+                                            "sec-fetch-dest": "document"}).status_code == 403

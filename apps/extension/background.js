@@ -17,7 +17,7 @@ chrome.action.onClicked.addListener(async tab => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type !== "MANGA_RENDER_TRANSLATE") return false;
   (async () => {
-    const {mangaCapability} = await chrome.storage.local.get("mangaCapability");
+    const {mangaCapability, mangaDebug} = await chrome.storage.local.get(["mangaCapability", "mangaDebug"]);
     if (!mangaCapability) throw new Error("Pair extension in Options first");
     if (!sender.tab?.id || !sender.tab?.url || typeof message.url !== "string") {
       throw new Error("Invalid translation request");
@@ -52,7 +52,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     form.append("file", blob, "panel.webp");
     let response;
     try {
-      response = await fetch(API, {method: "POST", body: form, headers: {Authorization: "Bearer " + mangaCapability}});
+      response = await fetch(API + (mangaDebug ? "?debug=true" : ""), {method: "POST", body: form, headers: {Authorization: "Bearer " + mangaCapability}});
     } catch {
       throw new Error("OCR API is offline at http://127.0.0.1:8000");
     }

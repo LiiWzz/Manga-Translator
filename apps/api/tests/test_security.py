@@ -116,3 +116,25 @@ def test_oauth_bounded_storage_and_expiry(tmp_path):
     auth.attempts[expired] = replace(auth.attempts[expired], expires_at=time.monotonic()-1)
     with raises(siwc.AuthError): auth._consume_attempt(expired, session_id="A")
     auth.start(session_id="A")
+
+
+def test_settings_referrer_policy_allows_browser_origin_for_unlock(monkeypatch, tmp_path):
+    """Settings form uses same-origin policy while keeping external POST origins denied."""
+    sec = LocalSecurity(CredentialStore(tmp_path))
+    key = sec.initialize()
+    monkeypatch.setattr(oauth_routes, "security", sec)
+    client = local_client()
+    page = client.get("/settings")
+    assert page.headers["referrer-policy"] == "same-origin"
+    csrf = page.text.split('name="csrf" value="')[1].split('"')[0]
+    # Standard same-origin form POST succeeds.
+    response = client.post("/auth/unlock", data={"csrf": csrf, "key": key},
+                           headers={"origin": HOST, "referer": HOST + "/settings"},
+                           follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/settings"
+    # Cross-site and opaque origins cannot unlock even with otherwise valid CSRF/key.
+    for origin in ("null", "https://evil.example"):
+        denied = client.post("/auth/unlock", data={"csrf": csrf, "key": key},
+                             headers={"origin": origin}, follow_redirects=False)
+        assert denied.status_code == 403

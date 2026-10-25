@@ -11,8 +11,11 @@ from pydantic import BaseModel
 
 from .bubble_renderer import TextRegion, overlay_data_url, render_translations
 from .ocr_grouping import extract_grouped_regions
+from .oauth_routes import router as oauth_router
+from .provider_adapter import translate_chatgpt
 
-app = FastAPI(title="Manga Translator POC v0.2")
+app = FastAPI(title="Manga Translator POC v0.3")
+app.include_router(oauth_router)
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_PIXELS = 24_000_000
 
@@ -43,7 +46,9 @@ def extract_regions(image: Image.Image):
 
 
 async def translate_texts(texts: list[str]) -> list[str]:
-    provider = os.getenv("TRANSLATOR_PROVIDER", "mock").lower()
+    provider = os.getenv("TRANSLATOR_PROVIDER", "chatgpt_oauth").lower()
+    if provider == "chatgpt_oauth":
+        return await translate_chatgpt(texts)
     if provider == "mock":
         return ["[TH DEMO] " + text for text in texts]
     if provider != "openai":
@@ -108,14 +113,14 @@ async def _process(file: UploadFile):
 
 @app.get("/health")
 def health():
-    return {"status":"ok","provider":os.getenv("TRANSLATOR_PROVIDER","mock")}
+    return {"status":"ok","provider":os.getenv("TRANSLATOR_PROVIDER","chatgpt_oauth")}
 
 
 @app.post("/api/v1/translate",response_model=TranslateResponse)
 async def translate(file: UploadFile = File(...)):
     image,_,_,regions = await _process(file)
     return TranslateResponse(image_width=image.width,image_height=image.height,regions=regions,
-                             provider=os.getenv("TRANSLATOR_PROVIDER","mock"))
+                             provider=os.getenv("TRANSLATOR_PROVIDER","chatgpt_oauth"))
 
 
 @app.post("/api/v1/translate-rendered",response_model=RenderResponse)
@@ -127,6 +132,6 @@ async def translate_rendered(file: UploadFile = File(...)):
     except RuntimeError as exc:
         raise HTTPException(status_code=503,detail=str(exc)) from exc
     return RenderResponse(image_width=image.width,image_height=image.height,regions=regions,
-                          provider=os.getenv("TRANSLATOR_PROVIDER","mock"),
+                          provider=os.getenv("TRANSLATOR_PROVIDER","chatgpt_oauth"),
                           overlay_data_url=overlay_data_url(overlay),
                           applied_regions=applied,skipped=skipped)

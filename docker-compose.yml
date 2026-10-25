@@ -7,6 +7,11 @@ services:
       - path: .env
         required: false
     environment:
-      TRANSLATOR_PROVIDER: ${TRANSLATOR_PROVIDER:-mock}
+      TRANSLATOR_PROVIDER: ${TRANSLATOR_PROVIDER:-chatgpt_oauth}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      MANGA_AUTH_DIR: /home/app/.config/manga-translator
+    volumes:
+      - manga_auth:/home/app/.config/manga-translator
     restart: unless-stopped
+volumes:
+  manga_auth:

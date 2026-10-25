@@ -98,3 +98,16 @@ def test_chatgpt_translation_adapter(monkeypatch):
     monkeypatch.setattr(main,"translate_chatgpt",fake)
     monkeypatch.setenv("TRANSLATOR_PROVIDER","chatgpt_oauth")
     assert asyncio.run(main.translate_texts(["Hello"])) == ["สวัสดี"]
+
+
+def test_logout_bad_discovery_clears_tokens(tmp_path):
+    def mock(request):
+        if request.url.path == "/.well-known/openid-configuration":
+            return httpx.Response(200, json={"revocation_endpoint": "https://attacker.example/revoke"})
+        raise AssertionError("Must never post token to untrusted host")
+    auth = siwc.ChatGPTAuth(CredentialStore(tmp_path), transport=httpx.MockTransport(mock))
+    auth.store.save({"client_id":"oaiapp_demo","access_token":"secret",
+                     "refresh_token":"sensitive-refresh","scopes":[siwc.PERMISSION]})
+    result = asyncio.run(auth.logout())
+    assert result["remote_revocation_confirmed"] is False
+    assert "refresh_token" not in auth.store.load()

@@ -330,7 +330,7 @@ class ChatGPTAuth:
                             "client_id": record["client_id"]
                         })
                         confirmed = response.status_code == 200
-                except httpx.HTTPError:
+                except (httpx.HTTPError, AuthError, ValueError, TypeError):
                     confirmed = False
             self.store.clear_tokens()
             return {"remote_revocation_confirmed": confirmed}

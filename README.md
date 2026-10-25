@@ -1,35 +1,37 @@
-# Manga Translator — Engineering POC v0.1
+# Manga Translator — Bubble-aware POC v0.2
 
-Chrome MV3 extension that detects manga images, OCRs English dialogue and overlays Thai text without changing original images.
+Chrome MV3 extension: translate English manga dialogue to Thai within flat dark/light speech balloons, without white HTML boxes or altering the original source image.
 
 ## Quick start
 
-Prerequisites: Docker (or Python 3.11+ with Tesseract OCR), Chrome.
-
 ```sh
-docker compose up --build
+git checkout feat/bubble-aware-rendering-v0.2
+docker compose up --build -d
+curl http://127.0.0.1:8000/health
 ```
 
-API health: http://127.0.0.1:8000/health
+Open `chrome://extensions` → Developer Mode → Load unpacked → choose `apps/extension`. **Reload the extension after pulling updates** and refresh the reader page. Click the toolbar icon; the first 3 eligible visible images will be processed.
 
-Open `chrome://extensions`, enable Developer Mode, choose **Load unpacked**, and select `apps/extension`.
-Browse an allowed page with image panels, then click the extension icon and **Translate visible images**.
+### Real translation setup
 
-Default translator is `mock` for a reproducible, zero-cost demonstration. To translate real text, copy `.env.example` to `.env`, configure `TRANSLATOR_PROVIDER=openai`, `OPENAI_API_KEY`, and optionally `OPENAI_MODEL`. Never put keys in extension source.
+The default `mock` provider is intentionally *not Thai translation*; v0.2 will not paint English demo strings onto the artwork. To enable Thai:
 
-## Known limitations
-- Best on English text in simple/white bubbles. No true inpainting.
-- Requires image fetch access; CORS, access controls, and dynamic canvases can prevent processing.
-- Images are sent to local backend only after user clicks translate; with configured cloud translation, OCR text is sent to the model provider.
-- Initial version translates up to 3 images per click, and does not persist cache across browsing sessions.
-- Popup-based translation works with normal web pages, not Chrome internal pages.
-- Only use with material and sites you are authorized to access.
+```sh
+cp .env.example .env
+# Set TRANSLATOR_PROVIDER=openai and OPENAI_API_KEY=<your secret>
+docker compose up --build -d --force-recreate
+```
 
-## Tests
+Never store API keys in extension code or Git. Browser image bytes are transmitted to your local backend when you click translate. With OpenAI mode, OCR text is sent to the cloud service.
+
+### Tests
+
 ```sh
 cd apps/api && pip install -e '.[test]' && pytest -q
 node --check ../extension/background.js
 node --check ../extension/content.js
 ```
 
-See [POC plan](docs/POC_PLAN.md) and [architecture](docs/ARCHITECTURE.md).
+See [Acceptance Contract](docs/V02_ACCEPTANCE.md), [Architecture](docs/ARCHITECTURE.md), and [CDN Troubleshooting](docs/CORS_TROUBLESHOOTING.md).
+
+**Limitations:** Flat monochrome balloons only. Decorative or textured dialogue may be skipped. This is not learned bubble segmentation or AI inpainting. The unprotected local demo API is not production ready. Only access material/sites you are authorized to use.

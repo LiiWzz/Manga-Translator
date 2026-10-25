@@ -5,7 +5,7 @@ import io
 import os
 
 import httpx
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile, Request, Depends
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel
 
@@ -13,6 +13,7 @@ from .bubble_renderer import TextRegion, overlay_data_url, render_translations
 from .ocr_grouping import extract_grouped_regions
 from .oauth_routes import router as oauth_router
 from .provider_adapter import translate_chatgpt
+from .local_security import require_extension
 
 app = FastAPI(title="Manga Translator POC v0.3")
 app.include_router(oauth_router)
@@ -117,14 +118,14 @@ def health():
 
 
 @app.post("/api/v1/translate",response_model=TranslateResponse)
-async def translate(file: UploadFile = File(...)):
+async def translate(file: UploadFile = File(...), gate=Depends(require_extension)):
     image,_,_,regions = await _process(file)
     return TranslateResponse(image_width=image.width,image_height=image.height,regions=regions,
                              provider=os.getenv("TRANSLATOR_PROVIDER","chatgpt_oauth"))
 
 
 @app.post("/api/v1/translate-rendered",response_model=RenderResponse)
-async def translate_rendered(file: UploadFile = File(...)):
+async def translate_rendered(file: UploadFile = File(...), gate=Depends(require_extension)):
     image,source,translations,regions = await _process(file)
     try:
         overlay,applied,skipped = render_translations(

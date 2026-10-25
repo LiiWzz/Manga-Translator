@@ -63,7 +63,7 @@ async function scan() {
       let data = cache.get(key);
       if (!data) {
         show("กำลังแปล " + (i + 1) + "/" + images.length);
-        const reply = await chrome.runtime.sendMessage({type:"MANGA_READER_TRANSLATE",url:image.url,context:context.slice(-1500)});
+        const reply = await chrome.runtime.sendMessage({type:"MANGA_READER_TRANSLATE",url:image.url,tabId:tab.id,context:context.slice(-1500)});
         if (!reply?.ok) {show("ภาพ " + (i+1) + ": " + (reply?.error || "แปลไม่สำเร็จ")); continue;}
         data = reply.data;
         cache.set(key, data);

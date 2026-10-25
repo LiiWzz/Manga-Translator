@@ -101,16 +101,18 @@ async def _decode_image(file: UploadFile) -> Image.Image:
         raise HTTPException(status_code=400,detail="Invalid image") from exc
 
 
-async def _process(file: UploadFile):
+async def _process(file: UploadFile, debug: bool = False):
     image = await _decode_image(file)
     try:
-        source = extract_regions(image)
+        analysis = analyze_regions(image) if debug else None
+        source = ([(list(r.bbox), r.source_text, r.confidence) for r in analysis.groups]
+                  if analysis is not None else extract_regions(image))
     except Exception as exc:
         raise HTTPException(status_code=503,detail="OCR unavailable") from exc
     translated = await translate_texts([txt for _,txt,_ in source])
     regions = [Region(bbox=box,source_text=txt,translated_text=translation,confidence=confidence)
                for (box,txt,confidence),translation in zip(source,translated)]
-    return image,source,translated,regions
+    return image,source,translated,regions,analysis
 
 
 @app.get("/health")
@@ -120,26 +122,21 @@ def health():
 
 @app.post("/api/v1/translate",response_model=TranslateResponse)
 async def translate(file: UploadFile = File(...), gate=Depends(require_extension)):
-    image,_,_,regions = await _process(file)
+    image,_,_,regions,_ = await _process(file)
     return TranslateResponse(image_width=image.width,image_height=image.height,regions=regions,
                              provider=os.getenv("TRANSLATOR_PROVIDER","chatgpt_oauth"))
 
 
 @app.post("/api/v1/translate-rendered",response_model=RenderResponse)
 async def translate_rendered(file: UploadFile = File(...), debug: bool = False, gate=Depends(require_extension)):
-    image,source,translations,regions = await _process(file)
+    image,source,translations,regions,analysis = await _process(file, debug=debug)
     try:
         overlay,applied,skipped = render_translations(
             image,[TextRegion(tuple(box),txt,confidence) for box,txt,confidence in source],translations)
     except RuntimeError as exc:
         raise HTTPException(status_code=503,detail=str(exc)) from exc
-    diagnostic = None
-    if debug:
-        # Reuse translated OCR regions without re-running expensive OCR.
-        from .ocr_grouping import OCRAnalysis
-        diagnostic = diagnostic_packet(OCRAnalysis(
-            [TextRegion(tuple(box), txt, confidence) for box, txt, confidence in source],
-            [TextRegion(tuple(box), txt, confidence) for box, txt, confidence in source], []))
+    diagnostic = diagnostic_packet(analysis) if analysis is not None else None
+    if diagnostic is not None:
         diagnostic["skipped"] = skipped
     return RenderResponse(image_width=image.width,image_height=image.height,regions=regions,
                           provider=os.getenv("TRANSLATOR_PROVIDER","chatgpt_oauth"),

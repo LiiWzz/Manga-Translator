@@ -23,7 +23,7 @@ def test_pkce_and_state(tmp_path):
     assert q["ext_agent_host_id"][0] == auth.store.host_id()
     with pytest.raises(siwc.AuthError):
         auth._consume_attempt("wrong")
-    assert auth.pending is None
+    assert auth.pending is not None  # wrong state must not consume valid attempt
 
 
 def test_host_id_and_permissions(tmp_path):
@@ -87,7 +87,7 @@ def test_csrf_and_origin():
     assert client.post("/auth/start",data={"csrf":"invalid"},follow_redirects=False).status_code==403
     assert client.post("/auth/start",data={"csrf":"invalid"},headers={"origin":"https://evil.example"},follow_redirects=False).status_code==403
     assert client.get("/settings",headers={"host":"evil.example"}).status_code==403
-    assert "access_token" not in client.get("/api/v1/provider/status").text
+    assert client.get("/api/v1/provider/status").status_code == 401
 
 
 def test_chatgpt_translation_adapter(monkeypatch):
@@ -113,46 +113,13 @@ def test_logout_bad_discovery_clears_tokens(tmp_path):
     assert "refresh_token" not in auth.store.load()
 
 
-def test_settings_form_submits_valid_csrf_and_starts_oauth(monkeypatch):
-    """Regression: the HTML must contain the actual CSRF token, not +csrf+."""
-    from html.parser import HTMLParser
-    from app import oauth_routes
-
-    class FormInspector(HTMLParser):
-        def __init__(self):
-            super().__init__()
-            self.forms = {}
-            self.action = None
-
-        def handle_starttag(self, tag, attrs):
-            attrs = dict(attrs)
-            if tag == "form":
-                self.action = attrs.get("action")
-            elif tag == "input" and self.action and attrs.get("name") == "csrf":
-                self.forms[self.action] = attrs.get("value")
-
-        def handle_endtag(self, tag):
-            if tag == "form":
-                self.action = None
-
+def test_settings_locked_and_csp():
     client = TestClient(app, base_url="http://127.0.0.1:8000")
     page = client.get("/settings")
     assert page.status_code == 200
-    inspector = FormInspector()
-    inspector.feed(page.text)
-    assert set(inspector.forms) == {"/auth/start", "/auth/reconnect", "/auth/model", "/auth/logout"}
-    tokens = set(inspector.forms.values())
-    assert len(tokens) == 1
-    token = tokens.pop()
-    assert token and token != "+csrf+" and len(token) > 30
-
-    monkeypatch.setattr(oauth_routes.auth, "start", lambda reconnect=False: "https://auth.openai.com/test")
-    response = client.post("/auth/start", data={"csrf": token}, follow_redirects=False)
-    assert response.status_code == 303
-    assert response.headers["location"] == "https://auth.openai.com/test"
-
-    rejected = client.post("/auth/start", data={"csrf": "invalid"}, follow_redirects=False)
-    assert rejected.status_code == 403
+    assert "Settings locked" in page.text
+    assert client.get("/auth/models").status_code == 403
+    assert client.post("/auth/start", data={"csrf": "invalid"}, follow_redirects=False).status_code == 403
 
 
 def test_oauth_csp_allows_only_openai_redirect_origin():

@@ -5,7 +5,7 @@ import io
 import os
 
 import httpx
-from fastapi import FastAPI, File, HTTPException, UploadFile, Request, Depends
+from fastapi import FastAPI, File, HTTPException, UploadFile, Request, Depends, Form
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel
 
@@ -145,7 +145,7 @@ async def translate_rendered(file: UploadFile = File(...), debug: bool = False, 
 
 
 @app.post("/api/v1/reader/translate")
-async def reader_translate(file: UploadFile = File(...), context: str = "", gate=Depends(require_extension)):
+async def reader_translate(file: UploadFile = File(...), context: str = Form(""), gate=Depends(require_extension)):
     """Non-destructive reader response. OCR and translations only, no overlay."""
     if len(context) > 1500:
         raise HTTPException(status_code=422, detail="Context exceeds 1500 characters")

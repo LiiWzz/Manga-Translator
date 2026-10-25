@@ -74,6 +74,7 @@
           replaced += reply.data.applied_regions || 0;
           skipped += (reply.data.skipped || []).length;
           if (reply.data.applied_regions > 0) renderOverlay(image, reply.data.overlay_data_url);
+          if (reply.data.diagnostics) renderDebug(image, reply.data);
         }
       } catch (error) {
         skipped++;
@@ -99,6 +100,30 @@
     observer.disconnect();
   });
   discover();
+
+  function renderDebug(image, data) {
+    const canvas = document.createElement("canvas");
+    canvas.width = data.image_width;
+    canvas.height = data.image_height;
+    const ctx = canvas.getContext("2d");
+    const skipped = new Map((data.skipped || []).map(v => [v.index, v.reason]));
+    (data.regions || []).forEach((r, index) => {
+      const [x, y, w, h] = r.bbox;
+      ctx.strokeStyle = skipped.has(index) ? "#ff4444" : "#00cc66";
+      ctx.lineWidth = 3;
+      ctx.strokeRect(x, y, w, h);
+      const reason = skipped.get(index) || "rendered";
+      const label = index + ": " + reason + " / " + String(r.source_text).slice(0, 65);
+      ctx.font = "bold 16px sans-serif";
+      ctx.fillStyle = "#ffffff";
+      const labelWidth = Math.min(canvas.width - x, ctx.measureText(label).width + 8);
+      ctx.fillStyle = skipped.has(index) ? "#992222" : "#006633";
+      ctx.fillRect(x, Math.max(0, y - 21), labelWidth, 21);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(label, x + 3, Math.max(16, y - 5));
+    });
+    renderOverlay(image, canvas.toDataURL("image/png"));
+  }
 
   function renderOverlay(image, url) {
     const overlay = document.createElement("img");

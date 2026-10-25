@@ -21,3 +21,8 @@ The original image overlay corrupts some dialogue and artwork, especially styliz
 
 ## Troubleshooting: panel says เปิดหน้ามังงะก่อน
 A Side Panel click is not a fresh `activeTab` grant. v0.4 now reads the active tab via the explicit `tabs` permission, reports inaccessible URLs, and requests the current website's host permission only after an explicit user action. Pull the branch and **Reload the unpacked extension** to activate new manifest permissions. Permission denial leaves the page unchanged. The Reader does not require broad automatic access to every website.
+
+## v0.4 Vision-first quality correction
+A real reader screenshot showed 79 individual OCR fragments (e.g. `my`, `A's`, `Ss`) for English dialogue inside a single balloon. This is a source-extraction failure, not a Thai word-wrap problem. The reader endpoint now sends the image directly to the selected **vision-capable** ChatGPT model via the existing Sign in with ChatGPT Responses API instead of Tesseract; it asks for one complete original-and-Thai pair per legible bubble, and rejects malformed/non-Thai results. No artificial bounding boxes are supplied, and the original page image is never modified.
+
+**Model constraint:** A selected text-only model can reject image input; select a model that supports visual input in the local ChatGPT Settings. Vision calls may consume more of the account's usage allowance and may be slower. Automated mocked tests verify request shape, strict validation and API responses; they do **not** prove real vision model accuracy or entitlement. Real visual reading and layout verification remain a Draft PR merge blocker. Existing opened Reader panels may still show cached results until **เริ่มใหม่** or the extension is Reloaded.

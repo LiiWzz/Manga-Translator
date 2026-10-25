@@ -31,6 +31,21 @@ def _loopback(request):
         raise HTTPException(status_code=403, detail="Cross-site request blocked")
 
 
+def _settings_page_access(request: Request):
+    """Allow top-level navigation to safe GET /settings from external pages.
+
+    Fetch Metadata marks user-clicked links from ChatGPT and other sites as
+    cross-site. They are not cross-site API/form submissions. Keep _loopback
+    strict for settings mutations, authenticated GETs and other requests.
+    """
+    check_host(request)
+    if (request.method == "GET"
+            and request.headers.get("sec-fetch-mode") == "navigate"
+            and request.headers.get("sec-fetch-dest") == "document"):
+        return
+    _loopback(request)
+
+
 def _record(request, csrf=None, admin=True):
     _loopback(request)
     record = _sessions.get(request.cookies.get("manga_session"))
@@ -103,7 +118,7 @@ code{overflow-wrap:anywhere}</style></head><body><h1>Manga Translator / ChatGPT<
 
 @router.get("/settings", response_class=HTMLResponse)
 async def settings(request: Request):
-    _loopback(request)
+    _settings_page_access(request)
     sid = request.cookies.get("manga_session")
     rec = _sessions.get(sid)
     if not rec or rec["expires"] < time.monotonic():

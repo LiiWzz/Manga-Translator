@@ -146,21 +146,17 @@ async def translate_rendered(file: UploadFile = File(...), debug: bool = False, 
 
 @app.post("/api/v1/reader/translate")
 async def reader_translate(file: UploadFile = File(...), context: str = Form(""), gate=Depends(require_extension)):
-    """Non-destructive reader response. OCR and translations only, no overlay."""
+    """Vision-first reading. No synthetic boxes or edits to the original image."""
     if len(context) > 1500:
         raise HTTPException(status_code=422, detail="Context exceeds 1500 characters")
     image = await _decode_image(file)
+    from .reader_vision import translate_image
+    from .siwc import AuthError
     try:
-        from fastapi.concurrency import run_in_threadpool
-        source = await run_in_threadpool(extract_regions, image)
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="OCR unavailable") from exc
-    translations = await translate_texts([txt for _, txt, _ in source], context=context)
-    if len(translations) != len(source):
-        raise HTTPException(status_code=502, detail="Translation count mismatch")
-    return TranslateResponse(
-        image_width=image.width, image_height=image.height,
-        regions=[Region(bbox=box, source_text=txt, translated_text=translated,
-                        confidence=confidence)
-                 for (box, txt, confidence), translated in zip(source, translations)],
-        provider=os.getenv("TRANSLATOR_PROVIDER", "chatgpt_oauth"))
+        dialogue = await translate_image(image, context)
+    except AuthError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"image_width": image.width, "image_height": image.height,
+            "regions": dialogue,
+            "provider": os.getenv("TRANSLATOR_PROVIDER", "chatgpt_oauth"),
+            "reader_mode": "vision-first"}

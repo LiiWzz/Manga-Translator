@@ -3,19 +3,15 @@ const SUPPORTED_IMAGE_HOSTS = new Set(["cdn.asurascans.com"]);
 const MAX_BYTES = 8 * 1024 * 1024;
 
 chrome.action.onClicked.addListener(async tab => {
-  if (!tab.id || !/^https?:\/\//.test(tab.url || "")) return;
+  if (!tab.id || !/^https?:\\/\\//.test(tab.url || "")) return;
   try {
-    await chrome.scripting.executeScript({
-      target: {tabId: tab.id},
-      files: ["content.js"]
-    });
-  } catch (error) {
-    console.warn("Manga Translator: cannot inject", error);
-  }
+    await chrome.scripting.executeScript({target:{tabId:tab.id},files:["reader-content.js"]});
+    await chrome.sidePanel.open({tabId:tab.id});
+  } catch(error) { console.warn("Manga Reader cannot open", error); }
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type !== "MANGA_RENDER_TRANSLATE") return false;
+  if (message.type !== "MANGA_RENDER_TRANSLATE" && message.type !== "MANGA_READER_TRANSLATE") return false;
   (async () => {
     const {mangaCapability, mangaDebug} = await chrome.storage.local.get(["mangaCapability", "mangaDebug"]);
     if (!mangaCapability) throw new Error("Pair extension in Options first");
@@ -50,9 +46,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (blob.size > MAX_BYTES) throw new Error("Image exceeds 8 MB limit");
     const form = new FormData();
     form.append("file", blob, "panel.webp");
+    const reader = message.type === "MANGA_READER_TRANSLATE";
+    if (reader) form.append("context", String(message.context || "").slice(0,1500));
     let response;
     try {
-      response = await fetch(API + (mangaDebug ? "?debug=true" : ""), {method: "POST", body: form, headers: {Authorization: "Bearer " + mangaCapability}});
+      response = await fetch(reader ? "http://127.0.0.1:8000/api/v1/reader/translate" : API + (mangaDebug ? "?debug=true" : ""), {method: "POST", body: form, headers: {Authorization: "Bearer " + mangaCapability}});
     } catch {
       throw new Error("OCR API is offline at http://127.0.0.1:8000");
     }

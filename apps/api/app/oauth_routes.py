@@ -108,7 +108,9 @@ async def settings(request: Request):
     rec = _sessions.get(sid)
     if not rec or rec["expires"] < time.monotonic():
         sid, rec = _new_session()
-    response = HTMLResponse(_page(rec), headers=HEADERS)
+    # HTML form POSTs need a usable Origin; no-referrer may cause Origin: null.
+    # Keep the stricter no-referrer policy on OAuth callbacks and sensitive responses.
+    response = HTMLResponse(_page(rec), headers={**HEADERS, "Referrer-Policy": "same-origin"})
     # Lax permits the authorization server's top-level GET callback to carry the session.
     response.set_cookie("manga_session", sid, httponly=True, samesite="lax",
                         secure=False, path="/", max_age=SESSION_TTL)

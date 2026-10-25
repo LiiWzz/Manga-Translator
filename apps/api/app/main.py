@@ -50,7 +50,7 @@ def extract_regions(image: Image.Image):
 async def translate_texts(texts: list[str], context: str = "") -> list[str]:
     provider = os.getenv("TRANSLATOR_PROVIDER", "chatgpt_oauth").lower()
     if provider == "chatgpt_oauth":
-        return await translate_chatgpt(texts, context=context)
+        return await translate_chatgpt(texts, context=context) if context else await translate_chatgpt(texts)
     if provider == "mock":
         return ["[TH DEMO] " + text for text in texts]
     if provider != "openai":

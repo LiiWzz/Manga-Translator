@@ -15,10 +15,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
     const {mangaCapability, mangaDebug} = await chrome.storage.local.get(["mangaCapability", "mangaDebug"]);
     if (!mangaCapability) throw new Error("Pair extension in Options first");
-    if (!sender.tab?.id || !sender.tab?.url || typeof message.url !== "string") {
-      throw new Error("Invalid translation request");
+    const reader = message.type === "MANGA_READER_TRANSLATE";
+    if (typeof message.url !== "string") throw new Error("Invalid image URL");
+    let tab = sender.tab;
+    if (reader) {
+      if (sender.id !== chrome.runtime.id || !Number.isInteger(message.tabId)) {
+        throw new Error("Invalid reader source");
+      }
+      const [candidate, active] = await Promise.all([
+        chrome.tabs.get(message.tabId), chrome.tabs.query({active:true,currentWindow:true})
+      ]);
+      if (!active.some(t => t.id === candidate.id)) throw new Error("Source tab is not active");
+      tab = candidate;
     }
-    const page = new URL(sender.tab.url);
+    if (!tab?.id || !tab?.url) throw new Error("Invalid translation source");
+    const page = new URL(tab.url);
     const image = new URL(message.url);
     if (image.protocol !== "https:" && image.origin !== page.origin) {
       throw new Error("Insecure image URL");
@@ -46,7 +57,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (blob.size > MAX_BYTES) throw new Error("Image exceeds 8 MB limit");
     const form = new FormData();
     form.append("file", blob, "panel.webp");
-    const reader = message.type === "MANGA_READER_TRANSLATE";
     if (reader) form.append("context", String(message.context || "").slice(0,1500));
     let response;
     try {

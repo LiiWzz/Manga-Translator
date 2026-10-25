@@ -16,6 +16,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from pythainlp.tokenize import word_tokenize
+from .text_quality import clean_translation, supports_text
 
 FONT_CANDIDATES = (
     os.environ.get("THAI_FONT_PATH", ""),
@@ -146,8 +147,9 @@ def render_translations(image: Image.Image, regions: list[TextRegion], translati
     applied, skipped = 0, []
     for index, (region, text) in enumerate(zip(regions, translations)):
         x, y, w, h = region.bbox
-        if not text or not re.search(r"[\u0E00-\u0E7F]", text):
-            skipped.append({"index": index, "reason": "not_thai"})
+        text, issue = clean_translation(text)
+        if issue:
+            skipped.append({"index": index, "reason": issue})
             continue
         if w < 12 or h < 9 or x < 0 or y < 0 or x+w > image.width or y+h > image.height:
             skipped.append({"index": index, "reason": "invalid_bbox"})
@@ -174,7 +176,12 @@ def render_translations(image: Image.Image, regions: list[TextRegion], translati
             skipped.append({"index": index, "reason": "layout_not_inside_uniform_bubble"})
             continue
         font, lines, spacing, lh = fit
-        draw.rectangle((x0, y0, x1, y1), fill=(*bg, 255))
+        if not supports_text(font, text):
+            skipped.append({"index": index, "reason": "unsupported_glyph"})
+            continue
+        # Paint entire validated flat layout, not only the narrow OCR baseline.
+        # Never erase arbitrary texture or cross the checked region boundary.
+        draw.rectangle((tx, ty, tx + dest_w - 1, ty + dest_h - 1), fill=(*bg, 255))
         total = len(lines)*lh+(len(lines)-1)*spacing
         top = ty+max(0,(dest_h-total)//2)
         for line in lines:

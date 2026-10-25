@@ -27,7 +27,7 @@ from .siwc_store import CredentialStore
 AUTHORIZATION_ENDPOINT = "https://auth.openai.com/api/accounts/authorize"
 TOKEN_ENDPOINT = "https://auth.openai.com/api/accounts/oauth/token"
 JWKS_URI = "https://auth.openai.com/.well-known/jwks.json"
-REVOCATION_URI = "https://auth.openai.com/api/accounts/oauth/revoke"
+DISCOVERY_URI = "https://auth.openai.com/.well-known/openid-configuration"
 ISSUER = "https://auth.openai.com"
 RESOURCE = "https://api.openai.com/v1"
 SCOPES = "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct"
@@ -316,7 +316,15 @@ class ChatGPTAuth:
             if record.get("refresh_token"):
                 try:
                     async with self._http() as client:
-                        response = await client.post(REVOCATION_URI, data={
+                        discovery = await client.get(DISCOVERY_URI)
+                        discovery.raise_for_status()
+                        uri = discovery.json().get("revocation_endpoint")
+                        # Guard against unexpected redirect destinations from discovery.
+                        from urllib.parse import urlparse
+                        target = urlparse(uri or "")
+                        if target.scheme != "https" or target.netloc != "auth.openai.com":
+                            raise AuthError("Invalid OpenAI revocation endpoint")
+                        response = await client.post(uri, data={
                             "token": record["refresh_token"],
                             "token_type_hint": "refresh_token",
                             "client_id": record["client_id"]

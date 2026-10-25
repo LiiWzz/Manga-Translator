@@ -61,7 +61,7 @@ def test_stream_requires_completed(tmp_path):
         assert request.url.path == "/v1/responses"
         body = json.loads(request.content)
         assert body["stream"] is True and body["store"] is False
-        return httpx.Response(200,content='data: {"type":"response.output_text.delta","delta":"{\"translations\":[\"สวัสดี\"]}"}\n\n')
+        return httpx.Response(200, content='data: ' + json.dumps({"type": "response.output_text.delta", "delta": '{"translations":["สวัสดี"]}'}, ensure_ascii=False) + '\n\n')
     auth=siwc.ChatGPTAuth(CredentialStore(tmp_path),transport=httpx.MockTransport(mock))
     auth.store.save({"access_token":"x","scopes":[siwc.PERMISSION],"expires_at":time.time()+300,
                      "selected_model":"model-1"})

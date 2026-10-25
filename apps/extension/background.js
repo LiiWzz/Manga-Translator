@@ -2,13 +2,11 @@ const API = "http://127.0.0.1:8000/api/v1/translate-rendered";
 const SUPPORTED_IMAGE_HOSTS = new Set(["cdn.asurascans.com"]);
 const MAX_BYTES = 8 * 1024 * 1024;
 
-chrome.action.onClicked.addListener(async tab => {
-  if (!tab.id || !/^https?:/.test(tab.url || "")) return;
-  try {
-    await chrome.scripting.executeScript({target:{tabId:tab.id},files:["reader-content.js"]});
-    await chrome.sidePanel.open({tabId:tab.id});
-  } catch(error) { console.warn("Manga Reader cannot open", error); }
-});
+// Let Chrome own action-icon opening. sidePanel.open() requires a user gesture
+// and fails if an await (such as scripting.executeScript) precedes it.
+// Reapply on service-worker startup; Chrome persists the behavior across restarts.
+chrome.sidePanel.setPanelBehavior({openPanelOnActionClick: true})
+  .catch(error => console.error("Manga Reader: cannot enable toolbar side panel", error));
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type !== "MANGA_RENDER_TRANSLATE" && message.type !== "MANGA_READER_TRANSLATE") return false;

@@ -34,6 +34,16 @@ curl http://127.0.0.1:8000/health
 
 In Chrome, open `chrome://extensions` → Enable **Developer Mode** → **Load unpacked** → select `apps/extension`. If already installed, click **Reload**.
 
+**v0.3.1 local security setup (required once):**
+
+```sh
+docker compose exec api python -m app.local_security init
+```
+
+Copy the one-time **local admin key** displayed in your terminal and enter it at `http://127.0.0.1:8000/settings`. Do not save this key in `.env`, Git, browser URL, or a bug report. Use `reset-admin` if lost, then restart the API to invalidate previously unlocked Settings sessions.
+
+After unlocking Settings, select **Generate pairing code**, open Chrome Extension Options, paste the one-use code and press **Pair extension**. Only the local capability goes into Chrome storage; OpenAI tokens stay in the backend. You may revoke the extension credential from authenticated Settings. See [Security ADR](docs/SECURITY_V031.md).
+
 In Extension Details → **Extension options**, click **Open ChatGPT connection settings** (or open `http://127.0.0.1:8000/settings` directly).
 
 1. Click **Continue with ChatGPT**. This opens the official OpenAI authorization page.

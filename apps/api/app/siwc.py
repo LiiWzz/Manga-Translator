@@ -269,7 +269,7 @@ class ChatGPTAuth:
         record["selected_model"] = slug
         self.store.save(record)
 
-    async def infer(self, prompt: str):
+    async def infer(self, prompt: str | list[dict], instructions: str | None = None):
         token = await self.access_token()
         record = self.store.load()
         model = record.get("selected_model")
@@ -278,7 +278,7 @@ class ChatGPTAuth:
         payload = {
             "model": model,
             "input": [{"role": "user", "content": prompt}],
-            "instructions": "Translate English manga dialogue into natural concise Thai, preserving order and names. Return only JSON with a translations array of strings.",
+            "instructions": instructions or "Translate English manga dialogue into natural concise Thai, preserving order and names. Return only JSON with a translations array of strings.",
             "store": False,
             "stream": True
         }

@@ -3,7 +3,7 @@ const SUPPORTED_IMAGE_HOSTS = new Set(["cdn.asurascans.com"]);
 const MAX_BYTES = 8 * 1024 * 1024;
 
 chrome.action.onClicked.addListener(async tab => {
-  if (!tab.id || !/^https?:\\/\\//.test(tab.url || "")) return;
+  if (!tab.id || !/^https?:/.test(tab.url || "")) return;
   try {
     await chrome.scripting.executeScript({target:{tabId:tab.id},files:["reader-content.js"]});
     await chrome.sidePanel.open({tabId:tab.id});

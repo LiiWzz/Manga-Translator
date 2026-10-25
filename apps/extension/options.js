@@ -31,3 +31,10 @@ async function check() {
 }
 document.getElementById("check").addEventListener("click", check);
 check();
+
+chrome.storage.local.get("mangaDebug").then(({mangaDebug}) => {
+  document.getElementById("debug").checked = Boolean(mangaDebug);
+});
+document.getElementById("debug").addEventListener("change", event => {
+  chrome.storage.local.set({mangaDebug: event.target.checked});
+});

@@ -5,7 +5,7 @@ The original image overlay corrupts some dialogue and artwork, especially styliz
 
 ## Workflow
 1. Connect and pair the extension via Options, as before.
-2. Open a manga webpage and click the extension toolbar button to open the Reader panel.
+2. Open a manga webpage and click the extension toolbar button to open the Reader panel. Chrome opens it directly via `sidePanel.setPanelBehavior({openPanelOnActionClick: true})`, so the toolbar click is not delayed by any content-script injection. Clicking **แปลภาพที่เห็น** within the panel injects the read-only scanner. Reload the unpacked extension via `chrome://extensions` after pulling changes. If it still does not open, inspect the extension **Service worker** console and Chrome version/support for the Side Panel API.
 3. Click **แปลภาพที่เห็น**; extension discovers up to three loaded viewport images and sends them serially to the authenticated local endpoint.
 4. Backend runs OCR, translates a batch of regions, and returns originals, Thai translations and coordinates. Panel displays both; **แก้คำแปล** edits locally, **ไปยังภาพ** scrolls to the source image.
 5. Scroll the page and click **แปลภาพที่เห็น** again. In-panel session cache avoids sending the same image URL twice. **เริ่มใหม่** clears the panel and cache.

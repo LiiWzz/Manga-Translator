@@ -26,4 +26,6 @@ jobs:
           node-version: "22"
       - run: node --check apps/extension/background.js
       - run: node --check apps/extension/content.js
+      - run: node --check apps/extension/reader-content.js
+      - run: node --check apps/extension/reader-panel.js
       - run: python -m json.tool apps/extension/manifest.json > /dev/null

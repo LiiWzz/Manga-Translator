@@ -117,6 +117,30 @@ def check_host(request: Request):
         raise HTTPException(status_code=403, detail="Invalid local Host")
 
 
+
+def check_local_browser_request(request: Request, *, allow_navigation=False):
+    """One policy for browser-only owner routes; never used for OAuth callbacks.
+
+    Only explicitly read-only endpoints may opt into cross-site *top-level*
+    navigation. Mutation/form endpoints always require same-origin context
+    and are separately protected by authenticated session + CSRF.
+    """
+    check_host(request)
+    if (allow_navigation and request.method == "GET"
+            and request.headers.get("sec-fetch-mode") == "navigate"
+            and request.headers.get("sec-fetch-dest") == "document"):
+        return
+    origin = request.headers.get("origin")
+    if origin and origin != LOCAL_ORIGIN:
+        raise HTTPException(status_code=403, detail="Cross-origin request blocked")
+    referer = request.headers.get("referer")
+    if referer and not referer.startswith(LOCAL_ORIGIN + "/"):
+        raise HTTPException(status_code=403, detail="Cross-site referer blocked")
+    # 'same-site' is NOT same-origin (e.g. another local port).
+    if request.headers.get("sec-fetch-site") in {"cross-site", "same-site"}:
+        raise HTTPException(status_code=403, detail="Cross-site request blocked")
+
+
 def check_extension_origin(request: Request):
     check_host(request)
     origin = request.headers.get("origin")

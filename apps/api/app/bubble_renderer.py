@@ -54,6 +54,17 @@ def _tone(image: np.ndarray, bbox: tuple[int, int, int, int]):
     return tuple(int(round(float(v))) for v in np.median(pixels, axis=0)), fg
 
 
+def _thai_clusters(text: str) -> list[str]:
+    """Keep base characters and Thai vowel/tone marks joined (legacy helper)."""
+    clusters = []
+    for char in text:
+        if clusters and (unicodedata.combining(char) or unicodedata.category(char).startswith("M")):
+            clusters[-1] += char
+        else:
+            clusters.append(char)
+    return clusters
+
+
 def _wrap(text: str, font: ImageFont.FreeTypeFont, width: int) -> list[str]:
     """Wrap Thai at dictionary word boundaries, never inside a combining cluster.
 

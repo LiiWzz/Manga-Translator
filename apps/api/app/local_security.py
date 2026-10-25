@@ -148,7 +148,7 @@ def require_extension(request: Request):
         yield
     finally:
         with security.lock:
-            security.inflight -= 1)
+            security.inflight -= 1
 
 
 if __name__ == "__main__":

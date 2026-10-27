@@ -8,15 +8,17 @@ The original image overlay corrupts some dialogue and artwork, especially styliz
 1. Connect and pair the extension via Options, as before.
 2. Open a manga webpage and click the extension toolbar button to open the Reader panel. Chrome opens it directly via `sidePanel.setPanelBehavior({openPanelOnActionClick: true})`, so the toolbar click is not delayed by any content-script injection. Clicking **แปลภาพที่เห็น** within the panel injects the read-only scanner. Reload the unpacked extension via `chrome://extensions` after pulling changes. If it still does not open, inspect the extension **Service worker** console and Chrome version/support for the Side Panel API.
 3. Click **แปลภาพที่เห็น**. If prompted, click **อนุญาตเว็บไซต์** and approve Chrome's per-site access; then the extension discovers up to three loaded viewport images and sends them serially to the authenticated local endpoint.
-4. Backend sends the image to the selected vision-capable model and validates complete source/Thai dialogue pairs. Tall strips are sent as overlapping crops in one request. Responses have no verified coordinates (`bbox` and `confidence` are `null`). The panel displays both texts; **แก้คำแปล** edits locally, **ไปยังภาพ** scrolls to the source image.
-5. Scroll the page and click **แปลภาพที่เห็น** again. In-panel session cache avoids sending the same image URL twice. **เริ่มใหม่** clears the panel and cache.
+4. Backend sends the image to the selected vision-capable model and validates complete source/Thai dialogue pairs. Tall strips are sent as overlapping crops in one request. Responses have no verified coordinates (`bbox` and `confidence` are `null`). Each image has a visible queued/loading/success/empty/error state. Errors stay on that image with **ลองใหม่**; retry sends only that failed image. The panel displays both texts; **แก้คำแปล** edits locally, **ไปยังภาพ** finds the source by image URL even if lazy loading has shifted its document index.
+5. Scroll the page and click **แปลภาพที่เห็น** again. In-panel session results avoid sending the same image URL twice, including empty results. Failed images require explicit retry. **เริ่มใหม่** clears results and edits, stops the remaining queue and ignores late replies. Switching source tabs, changing the page URL (including its fragment), reloading or closing the source tab clears the page session and its context; click translate again to start on the new page.
 
 ## Safety / limitations
 
 - No OpenAI tokens in extension storage; local pairing capability still required.
 - Reader endpoint enforces the existing 8 MiB, 24 MP image bounds and extension auth. Context is bounded to 1500 characters. Caller text is treated as quoted context.
 - Tall-strip input is limited to eight overlapping crops and 8 MiB of combined image data URLs. Inputs beyond those limits fail before inference. More crops can consume more model usage; no automatic retries are added.
-- Cache is per panel lifetime, keyed by tab and image URL; edits are not persisted and do not retrain AI.
+- Results and edits last only for the current tab/page session and are not persisted or used to retrain AI. URL changes conservatively start a new session. Chapter changes inside an SPA that keeps the same URL cannot be identified generically; press **เริ่มใหม่** in that case. Persistent cache/edits are the next milestone.
+- Reset/navigation stops new queued submissions and discards obsolete results; an inference already submitted may still complete and consume usage. This milestone does not cancel provider-side work.
+- Retry context includes successful earlier images from this page, bounded to 1500 characters, and excludes later images. A correction is included when building context for subsequent requests.
 - Three visible images are processed per click to keep latency and local gateway budgets bounded, not the whole chapter. Lazy-loaded pages require scrolling.
 - Vision accuracy and reading order require human review. Avoiding duplicate dialogue across crop overlaps relies on the prompt; image fetch still uses configured host permissions.
 - No crop-selection UI in this MVP. The optional later iteration can add user-selected crop regions with careful coordinate scaling.
@@ -34,4 +36,33 @@ A real reader screenshot showed 79 individual OCR fragments (e.g. `my`, `A's`, `
 
 Matching punctuation-only balloons such as `......` and `?!` no longer invalidate otherwise valid Thai translations. Untranslated English, malformed output and invalid glyphs still fail validation. The reported 900 × 16000 strip previously shrank to 169 × 3000; it now uses six overlapping crops that preserve its 900-pixel width. The supplied image returned nine accepted entries, and the user accepted the fix. This does not establish quality across all manga or complete every manual acceptance check.
 
-Next work is Reader reliability, persistent cache/edits, translation-quality evaluation, selected-region translation and controlled continuous reading, in that order. These features are planned, not implemented. [The roadmap](POC_PLAN.md) also records the tentative v2 overlay investigation separately from the historical v0.2 prototype.
+The Reader reliability feature branch implements the first milestone with mocked behavioral regressions; manual Chrome acceptance is still pending. Next work remains persistent cache/edits, translation-quality evaluation, selected-region translation and controlled continuous reading, in that order. [The roadmap](POC_PLAN.md) also records the tentative v2 overlay investigation separately from the historical v0.2 prototype. Additional brainstorming is saved in [the idea backlog](READER_IDEAS.md) without changing that order.
+
+## Reliability acceptance
+
+Automated: run `node --test apps/extension/test-reader-reliability.cjs` and the
+existing wiring/syntax checks. Tests drive the real panel, content and worker
+scripts with mocked Chrome APIs and generated dialogue, without inference usage.
+
+2026-10-28 verification: 28 Reader behavior tests and all 70 mocked API tests
+passed; JavaScript syntax, Side Panel wiring and manifest checks passed. A
+BrowserOS neo preview using the real panel HTML/JS with mocked Chrome APIs also
+confirmed persistent error display, no resubmission on repeat scan, retry of only
+the failed image, and rejection of a late reply after reset. This preview does
+not verify installed-extension permissions, service-worker lifecycle or real
+Chrome Side Panel integration.
+
+Manual Chrome checks before leaving Draft:
+
+1. Translate multiple permitted images with one failure. Confirm the error stays
+   visible, scan does not resend existing results, and **ลองใหม่** retries only
+   the failed image while keeping successful translations and edits.
+2. Reset during a request, then start again. Confirm the old response never
+   repopulates the panel or unlocks the new run's controls.
+3. Switch tabs, change chapters/URL, reload and close the source tab during a
+   request. Confirm queued work stops and the next session has no old context.
+4. Reset or navigate while permissions/discovery are pending. Confirm no old
+   request is submitted afterwards. Deny site permission and confirm the page is
+   unchanged.
+5. Insert a lazy-loaded image before an already translated image. Confirm
+   **ไปยังภาพ** locates the original image and does not scroll a different chapter.

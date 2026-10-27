@@ -16,3 +16,6 @@ assert(panel.includes("chrome.permissions.request({origins: [request.pattern]})"
 assert(manifest.permissions.includes("tabs"));
 assert(manifest.optional_host_permissions.includes("https://*/*"));
 console.log("Side Panel action wiring regression passed.");
+
+// Keep Reader behavior regressions in the existing CI entrypoint as well.
+require("./test-reader-reliability.cjs");

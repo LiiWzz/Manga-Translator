@@ -3,6 +3,11 @@
  if (window.__mangaReaderInstalled) return;
  window.__mangaReaderInstalled = true;
  chrome.runtime.onMessage.addListener((message,_sender,sendResponse) => {
+  if ((message.type === "MANGA_READER_DISCOVER" || message.type === "MANGA_READER_LOCATE")
+      && message.pageUrl !== location.href) {
+   sendResponse(false);
+   return false;
+  }
   if (message.type === "MANGA_READER_DISCOVER") {
    const results = [];
    [...document.images].forEach((img,index)=>{
@@ -16,7 +21,8 @@
    return false;
   }
   if(message.type==="MANGA_READER_LOCATE"){
-   const img=document.images[message.index];
+   // Lazy loading can insert images and invalidate the original document index.
+   const img=[...document.images].find(image => (image.currentSrc||image.src)===message.url);
    if(img) img.scrollIntoView({behavior:"smooth",block:"center"});
    sendResponse(Boolean(img));
    return false;

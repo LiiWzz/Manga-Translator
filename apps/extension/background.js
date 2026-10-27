@@ -8,6 +8,20 @@ const MAX_BYTES = 8 * 1024 * 1024;
 chrome.sidePanel.setPanelBehavior({openPanelOnActionClick: true})
   .catch(error => console.error("Manga Reader: cannot enable toolbar side panel", error));
 
+async function readerSource(message, sender) {
+  if (sender.id !== chrome.runtime.id || !Number.isInteger(message.tabId) || typeof message.pageUrl !== "string") {
+    throw new Error("Invalid reader source");
+  }
+  const [candidate, active] = await Promise.all([
+    chrome.tabs.get(message.tabId), chrome.tabs.query({active:true,currentWindow:true})
+  ]);
+  if (!active.some(t => t.id === candidate.id)) throw new Error("Source tab is not active");
+  if (candidate.url !== message.pageUrl || candidate.status === "loading") {
+    throw new Error("Source page changed; scan the current page again");
+  }
+  return candidate;
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type !== "MANGA_RENDER_TRANSLATE" && message.type !== "MANGA_READER_TRANSLATE") return false;
   (async () => {
@@ -16,16 +30,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const reader = message.type === "MANGA_READER_TRANSLATE";
     if (typeof message.url !== "string") throw new Error("Invalid image URL");
     let tab = sender.tab;
-    if (reader) {
-      if (sender.id !== chrome.runtime.id || !Number.isInteger(message.tabId)) {
-        throw new Error("Invalid reader source");
-      }
-      const [candidate, active] = await Promise.all([
-        chrome.tabs.get(message.tabId), chrome.tabs.query({active:true,currentWindow:true})
-      ]);
-      if (!active.some(t => t.id === candidate.id)) throw new Error("Source tab is not active");
-      tab = candidate;
-    }
+    if (reader) tab = await readerSource(message, sender);
     if (!tab?.id || !tab?.url) throw new Error("Invalid translation source");
     const page = new URL(tab.url);
     const image = new URL(message.url);
@@ -56,6 +61,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const form = new FormData();
     form.append("file", blob, "panel.webp");
     if (reader) form.append("context", String(message.context || "").slice(0,1500));
+    // Fetching the image can outlive navigation. Do not submit old chapter context.
+    if (reader) await readerSource(message, sender);
     let response;
     try {
       response = await fetch(reader ? "http://127.0.0.1:8000/api/v1/reader/translate" : API + (mangaDebug ? "?debug=true" : ""), {method: "POST", body: form, headers: {Authorization: "Bearer " + mangaCapability}});

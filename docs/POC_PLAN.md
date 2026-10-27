@@ -2,6 +2,10 @@
 
 Updated: 2026-10-28. This is the planning source of truth for upcoming work.
 
+The [Reader idea backlog](READER_IDEAS.md) records the latest brainstorming for
+later consideration. The user chose to retain the existing milestone order below;
+the backlog does not expand or replace it.
+
 ## Current baseline: Vision + Reader Side Panel
 
 The working POC translates English manga dialogue into Thai through the local
@@ -12,8 +16,10 @@ overlapping crops in one inference request to preserve readable text.
 
 The user has accepted the latest Reader fix after trying it. This is evidence for
 that reading workflow, not completion of a broad quality or security benchmark.
-Cache and edits currently last only for the panel session; context isolation,
-persistent error details and stronger cancellation handling remain planned work.
+Cache and edits currently last only for the current page session. The Reader
+reliability feature branch adds per-image errors and retries, isolates context by
+tab/page URL and discards obsolete work after reset or navigation. Automated
+regressions cover these behaviors; real Chrome acceptance remains pending.
 See [Reader behavior and limits](READER_V04.md).
 
 ## Next milestones

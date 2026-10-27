@@ -6,7 +6,7 @@ Chrome Extension for translating English manga dialogue into Thai through a **lo
 
 ## Development direction
 
-The current Reader branch uses **Vision + Chrome Side Panel** and has a user-accepted translation fix. Upcoming work prioritizes reliability, persistent cache/edits, translation quality, selected-region translation and controlled continuous reading. **Optional overlay may be explored in v2**, subject to visual-quality and cost evaluation; it is not a committed feature and is distinct from the historical v0.2 prototype. See the [development roadmap](docs/POC_PLAN.md) and [current Reader workflow](docs/READER_V04.md). The v0.3 setup below describes the earlier OAuth/overlay branch.
+The current Reader branch uses **Vision + Chrome Side Panel**. The reliability baseline has user-reported Chrome acceptance. The next feature branch adds [persistent local cache and corrections](docs/READER_CACHE.md), with automated checks passing and real Chrome acceptance pending. Translation quality, selected-region translation and controlled continuous reading follow in that order. **Optional overlay may be explored in v2**, subject to visual-quality and cost evaluation; it is not a committed feature and is distinct from the historical v0.2 prototype. See the [development roadmap](docs/POC_PLAN.md) and [current Reader workflow](docs/READER_V04.md). The v0.3 setup below describes the earlier OAuth/overlay branch.
 
 ## Requirements
 

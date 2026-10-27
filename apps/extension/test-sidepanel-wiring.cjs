@@ -19,3 +19,7 @@ console.log("Side Panel action wiring regression passed.");
 
 // Keep Reader behavior regressions in the existing CI entrypoint as well.
 require("./test-reader-reliability.cjs");
+require("./test-reader-cache.cjs");
+for (const file of ["reader-cache.js", "background.js", "reader-panel.js"]) {
+  new (require("node:vm").Script)(fs.readFileSync("apps/extension/" + file, "utf8"), {filename: file});
+}

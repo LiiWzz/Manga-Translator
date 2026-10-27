@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import os
 
 import httpx
@@ -16,6 +17,7 @@ from .provider_adapter import translate_chatgpt
 from .local_security import require_extension
 
 app = FastAPI(title="Manga Translator POC v0.3")
+logger = logging.getLogger(__name__)
 app.include_router(oauth_router)
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_PIXELS = 24_000_000
@@ -155,6 +157,8 @@ async def reader_translate(file: UploadFile = File(...), context: str = Form("")
     try:
         dialogue = await translate_image(image, context)
     except AuthError as exc:
+        # AuthError messages are safe by contract; omit image, dialogue and credentials.
+        logger.warning("Reader vision rejected image (%dx%d): %s", image.width, image.height, exc)
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return {"image_width": image.width, "image_height": image.height,
             "regions": dialogue,

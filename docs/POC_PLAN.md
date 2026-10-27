@@ -19,7 +19,9 @@ that reading workflow, not completion of a broad quality or security benchmark.
 Cache and edits currently last only for the current page session. The Reader
 reliability feature branch adds per-image errors and retries, isolates context by
 tab/page URL and discards obsolete work after reset or navigation. Automated
-regressions cover these behaviors; real Chrome acceptance remains pending.
+regressions cover these behaviors. On 2026-10-28 the user reported completing
+the Chrome Side Panel check; this is recorded as user-reported manual acceptance
+for PR #7. Persistent cache and edits remain the next implementation milestone.
 See [Reader behavior and limits](READER_V04.md).
 
 ## Next milestones

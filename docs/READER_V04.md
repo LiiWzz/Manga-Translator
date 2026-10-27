@@ -22,7 +22,7 @@ The original image overlay corrupts some dialogue and artwork, especially styliz
 - Three visible images are processed per click to keep latency and local gateway budgets bounded, not the whole chapter. Lazy-loaded pages require scrolling.
 - Vision accuracy and reading order require human review. Avoiding duplicate dialogue across crop overlaps relies on the prompt; image fetch still uses configured host permissions.
 - No crop-selection UI in this MVP. The optional later iteration can add user-selected crop regions with careful coordinate scaling.
-- Real Chrome Side Panel E2E must be run manually before moving this PR out of Draft.
+- The user reported completing the Chrome Side Panel check on 2026-10-28; see the acceptance record below. PR review and merge approval remain separate.
 
 ## Troubleshooting: panel says เปิดหน้ามังงะก่อน
 A Side Panel click is not a fresh `activeTab` grant. v0.4 now reads the active tab via the explicit `tabs` permission, reports inaccessible URLs, and requests the current website's host permission only after an explicit user action. Pull the branch and **Reload the unpacked extension** to activate new manifest permissions. Permission denial leaves the page unchanged. The Reader does not require broad automatic access to every website.
@@ -30,13 +30,13 @@ A Side Panel click is not a fresh `activeTab` grant. v0.4 now reads the active t
 ## v0.4 Vision-first quality correction
 A real reader screenshot showed 79 individual OCR fragments (e.g. `my`, `A's`, `Ss`) for English dialogue inside a single balloon. This is a source-extraction failure, not a Thai word-wrap problem. The reader endpoint now sends the image directly to the selected **vision-capable** ChatGPT model via the existing Sign in with ChatGPT Responses API instead of Tesseract; it asks for one complete original-and-Thai pair per legible bubble, and rejects malformed output or untranslated English dialogue. No artificial bounding boxes are supplied, and the original page image is never modified.
 
-**Model constraint:** A selected text-only model can reject image input; select a model that supports visual input in the local ChatGPT Settings. Vision calls may consume more of the account's usage allowance and may be slower. Automated mocked tests verify request shape, strict validation and API responses; they do **not** prove real vision model accuracy or entitlement. Real visual reading and layout verification remain a Draft PR merge blocker. Existing opened Reader panels may still show cached results until **เริ่มใหม่** or the extension is Reloaded.
+**Model constraint:** A selected text-only model can reject image input; select a model that supports visual input in the local ChatGPT Settings. Vision calls may consume more of the account's usage allowance and may be slower. Automated mocked tests verify request shape, strict validation and API responses; they do **not** prove real vision model accuracy or entitlement. The user-reported Chrome check is recorded below; broader translation-quality evaluation remains a later milestone. Existing opened Reader panels may still show cached results until **เริ่มใหม่** or the extension is Reloaded.
 
 ## Latest accepted fix and next work
 
 Matching punctuation-only balloons such as `......` and `?!` no longer invalidate otherwise valid Thai translations. Untranslated English, malformed output and invalid glyphs still fail validation. The reported 900 × 16000 strip previously shrank to 169 × 3000; it now uses six overlapping crops that preserve its 900-pixel width. The supplied image returned nine accepted entries, and the user accepted the fix. This does not establish quality across all manga or complete every manual acceptance check.
 
-The Reader reliability feature branch implements the first milestone with mocked behavioral regressions; manual Chrome acceptance is still pending. Next work remains persistent cache/edits, translation-quality evaluation, selected-region translation and controlled continuous reading, in that order. [The roadmap](POC_PLAN.md) also records the tentative v2 overlay investigation separately from the historical v0.2 prototype. Additional brainstorming is saved in [the idea backlog](READER_IDEAS.md) without changing that order.
+The Reader reliability feature branch implements the first milestone with mocked behavioral regressions and user-reported manual Chrome acceptance on 2026-10-28. Next work remains persistent cache/edits, translation-quality evaluation, selected-region translation and controlled continuous reading, in that order. [The roadmap](POC_PLAN.md) also records the tentative v2 overlay investigation separately from the historical v0.2 prototype. Additional brainstorming is saved in [the idea backlog](READER_IDEAS.md) without changing that order.
 
 ## Reliability acceptance
 
@@ -52,7 +52,15 @@ the failed image, and rejection of a late reply after reset. This preview does
 not verify installed-extension permissions, service-worker lifecycle or real
 Chrome Side Panel integration.
 
-Manual Chrome checks before leaving Draft:
+2026-10-28 manual acceptance: the user reported that the Chrome Side Panel check
+was completed. This records the user's verification of the Reader implementation
+at commit `8024581`; it does not claim that the agent independently ran installed
+Chrome E2E or that every scenario below has an individually recorded result.
+The browser-check blocker for PR #7 is cleared; code review, parent PRs and
+explicit human merge approval remain separate. No merge is authorized by this
+acceptance record.
+
+Manual regression scenarios for future Reader changes:
 
 1. Translate multiple permitted images with one failure. Confirm the error stays
    visible, scan does not resend existing results, and **ลองใหม่** retries only

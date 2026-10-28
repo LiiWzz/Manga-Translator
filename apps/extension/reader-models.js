@@ -1,6 +1,6 @@
 /* Model selection in a trusted extension page. No inference or credential URLs. */
 class ReaderModelPicker {
-  constructor({onBusyChange}) {
+  constructor({onBusyChange, onOpen = () => {}}) {
     this.onBusyChange = onBusyChange;
     this.picker = document.getElementById("model-picker");
     this.label = document.getElementById("model-current");
@@ -10,6 +10,7 @@ class ReaderModelPicker {
     this.status = document.getElementById("model-status");
     this.settings = document.getElementById("model-settings");
     this.catalog = [];
+    this.optionsKey = null;
     this.selected = null;
     this.version = null;
     this.epoch = 0;
@@ -24,12 +25,16 @@ class ReaderModelPicker {
     this.reload.addEventListener("click", () => this.loadCatalog());
     this.settings.addEventListener("click", () => chrome.runtime.openOptionsPage());
     this.picker.addEventListener("toggle", () => {
-      if (this.picker.open && !this.version) this.loadCatalog();
+      if (!this.picker.open) return;
+      onOpen();
+      if (!this.version) this.loadCatalog();
     });
     this.picker.addEventListener("keydown", event => {
       if (event.key === "Escape") { this.picker.open = false; document.getElementById("model-summary").focus(); }
     });
-    window.addEventListener("focus", () => this.picker.open ? this.loadCatalog() : this.refreshStatus());
+    // Native select popups can return window focus before committing a choice.
+    // Keep the open picker stable; its Reload button explicitly refreshes it.
+    window.addEventListener("focus", () => { if (!this.picker.open) this.refreshStatus(); });
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area !== "local" || (!changes.mangaCapability && !changes.mangaSettingsCapability)) return;
       ++this.epoch;
@@ -56,6 +61,7 @@ class ReaderModelPicker {
       signal: AbortSignal.timeout(15000), ...options,
       headers: {Authorization: "Bearer " + token, ...options.headers}});
   }
+  close() { this.picker.open = false; }
   setReaderBusy(value) {
     if (value && !this.readerBusy) this.picker.open = false;
     this.readerBusy = value;
@@ -67,23 +73,28 @@ class ReaderModelPicker {
     this.label.title = this.label.textContent;
     this.count.textContent = this.catalog.length + " รุ่น";
     this.count.hidden = !this.version || !this.catalog.length;
-    this.select.replaceChildren();
-    if (!this.catalog.length || !selected) {
-      const option = document.createElement("option");
-      option.value = "";
-      option.textContent = this.selected ? "โมเดลปัจจุบัน: " + this.selected : "เลือกโมเดล";
-      option.disabled = true;
-      option.selected = true;
-      this.select.append(option);
+    const optionsKey = JSON.stringify([this.catalog, selected ? null : this.selected]);
+    if (optionsKey !== this.optionsKey) {
+      this.select.replaceChildren();
+      if (!this.catalog.length || !selected) {
+        const option = document.createElement("option");
+        option.value = "";
+        option.textContent = this.selected ? "โมเดลปัจจุบัน: " + this.selected : "เลือกโมเดล";
+        option.disabled = true;
+        option.selected = true;
+        this.select.append(option);
+      }
+      for (const model of this.catalog) {
+        const option = document.createElement("option");
+        option.value = model.slug;
+        option.textContent = model.display_name;
+        option.selected = model.slug === this.selected;
+        this.select.append(option);
+      }
+      this.optionsKey = optionsKey;
     }
-    for (const model of this.catalog) {
-      const option = document.createElement("option");
-      option.value = model.slug;
-      option.textContent = model.display_name;
-      option.selected = model.slug === this.selected;
-      this.select.append(option);
-    }
-    this.select.value = selected ? this.selected : "";
+    const value = selected ? this.selected : "";
+    if (this.select.value !== value) this.select.value = value;
     this.select.disabled = this.readerBusy || this.loading || this.saving || !this.canManage || !this.version || !this.catalog.length;
     this.reload.disabled = this.readerBusy || this.loading || this.saving;
     this.settings.hidden = this.canManage && Boolean(this.version) && this.catalog.length > 0;

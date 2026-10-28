@@ -510,13 +510,14 @@ test("a failed durable edit keeps the editor open and does not display it as sav
   assert.match(h.elements.status.textContent, /Storage full/);
 });
 
-test("clear during inference discards late results and prevents cache resurrection", async () => {
-  const worker = workerHarness(), h = harness(), pending = deferred();
-  worker.inference = () => pending.promise;
+test("clear during inference discards late results and prevents cache resurrection", {timeout: 5000}, async () => {
+  const worker = workerHarness(), h = harness(), pending = deferred(), entered = deferred();
+  worker.inference = () => { entered.resolve(); return pending.promise; };
   h.state.translate = message => worker.send(message);
   h.state.mutate = message => worker.send(message);
   const run = h.scan();
-  await settle();
+  // Native image hashing can outlive any fixed count of event-loop turns.
+  await entered.promise;
   assert.equal(worker.fetched.filter(url => url.endsWith("/translate")).length, 1);
   await h.elements["clear-cache"].click();
   pending.resolve({ok: true, json: async () => ({profile: worker.profile, regions: reply().data.regions})});

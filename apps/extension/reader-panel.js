@@ -214,6 +214,15 @@ function renderImage(record) {
       retry.disabled = Boolean(activeRun) || Boolean(modelPicker?.saving);
       retry.addEventListener("click", () => scan(record));
       record.card.append(retry);
+      if (record.action === "settings") {
+        const settings = element("button", "retry-button", "เปิด Settings");
+        settings.addEventListener("click", () => chrome.runtime.openOptionsPage());
+        record.card.append(settings);
+      } else if (record.action === "usage") {
+        const usage = element("button", "retry-button", "ตรวจการใช้งานบัญชี");
+        usage.addEventListener("click", () => chrome.tabs.create({url: "https://chatgpt.com/settings/usage"}));
+        record.card.append(usage);
+      }
     }
   }
   updateReaderUi();
@@ -259,6 +268,8 @@ async function translateRecord(run, record) {
     record.state = "error";
     record.error = reply?.error || "ข้อมูลคำแปลไม่ถูกต้อง กรุณาลองใหม่";
     run.settingsChanged = Boolean(reply?.settingsChanged);
+    record.action = reply?.action;
+    if (reply?.stopQueue) run.stopReason = record.error;
   } else {
     if (/^[a-f0-9]{64}$/.test(reply.data.profile)) run.profile = reply.data.profile;
     record.regions = regions;
@@ -337,17 +348,19 @@ async function scan(retryRecord = null) {
       if (!current(run)) break;
       await translateRecord(run, record);
       if (!current(run)) break;
-      if (run.settingsChanged) {
+      if (run.settingsChanged || run.stopReason) {
         for (const remaining of queue) if (remaining.state === "queued") {
           remaining.state = "error";
-          remaining.error = "ยังไม่ได้ส่งแปล เนื่องจากโมเดลหรือการตั้งค่าเปลี่ยนแล้ว";
+          remaining.error = run.stopReason ? "ยังไม่ได้ส่งแปล: " + run.stopReason : "ยังไม่ได้ส่งแปล เนื่องจากโมเดลหรือการตั้งค่าเปลี่ยนแล้ว";
+          remaining.action = record.action;
           renderImage(remaining);
         }
         break;
       }
     }
     if (current(run)) {
-      if (run.settingsChanged) show("โมเดลหรือการตั้งค่าเปลี่ยนแล้ว หยุดคิวไว้ กดลองใหม่ทีละภาพเมื่อพร้อม");
+      if (run.stopReason) show("หยุดคิวไว้: " + run.stopReason);
+      else if (run.settingsChanged) show("โมเดลหรือการตั้งค่าเปลี่ยนแล้ว หยุดคิวไว้ กดลองใหม่ทีละภาพเมื่อพร้อม");
       else showSummary();
     }
   } catch (error) {
@@ -358,7 +371,7 @@ async function scan(retryRecord = null) {
       activeRun = null;
       setScanDisabled(false);
       updateRetryButtons();
-      if (run.settingsChanged) modelPicker?.refreshStatus();
+      if (run.settingsChanged || run.stopReason) modelPicker?.refreshStatus();
     }
   }
 }

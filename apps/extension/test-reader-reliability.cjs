@@ -100,7 +100,7 @@ function harness({savedAppearance, modelAccess = false} = {}) {
     }
     throw new Error("Unexpected model request");
   };
-  vm.runInNewContext(fs.readFileSync("apps/extension/reader-models.js", "utf8") + "\n" + fs.readFileSync("apps/extension/reader-panel.js", "utf8"), {
+  vm.runInNewContext(fs.readFileSync("apps/extension/connection-errors.js", "utf8") + "\n" + fs.readFileSync("apps/extension/reader-models.js", "utf8") + "\n" + fs.readFileSync("apps/extension/reader-panel.js", "utf8"), {
     chrome, URL, AbortSignal, fetch, window: {addEventListener(name, handler) { (state.windowEvents[name] ||= event()).addListener(handler); }},
     document: {documentElement: root, getElementById: id => elements[id], createElement: tag => new Element(tag)}
   });
@@ -407,6 +407,53 @@ function workerHarness({storage = {}} = {}) {
   state.send = (message = state.message, sender = {id: "test-extension", url: "chrome-extension://test-extension/reader-panel.html"}) => new Promise(resolve => listener(message, sender, resolve));
   return state;
 }
+
+for (const code of ["reconnect_required", "permission_required", "usage_limit", "unsupported_capability"]) {
+  test("global failure " + code + " stops unsent Reader images and offers recovery", async () => {
+    const h = harness();
+    h.state.images.push({index: 1, url: "https://reader.example/2.png"});
+    h.state.translate = async () => ({ok: false, error: "Generated recovery reason", stopQueue: true,
+      errorCode: code, action: code === "usage_limit" ? "usage" : "settings"});
+    await h.scan();
+    assert.equal(h.state.calls.length, 1);
+    assert.match(h.text(), /ยังไม่ได้ส่งแปล/);
+    assert.match(h.elements.status.textContent, /หยุดคิวไว้/);
+    assert.match(h.text(), code === "usage_limit" ? /ตรวจการใช้งานบัญชี/ : /เปิด Settings/);
+  });
+}
+
+test("worker preserves safe error categories and omits raw provider text", async () => {
+  const h = workerHarness();
+  h.inference = () => ({ok: false, status: 429, json: async () => ({detail: {
+    code: "usage_limit", message: "PRIVATE provider text", stop_queue: true, action: "usage"}})});
+  const result = await h.send();
+  assert.equal(result.ok, false);
+  assert.equal(result.errorCode, "usage_limit");
+  assert.equal(result.stopQueue, true);
+  assert.equal(result.action, "usage");
+  assert.doesNotMatch(result.error, /PRIVATE/);
+});
+
+test("unknown error response text never reaches Reader", async () => {
+  const h = workerHarness();
+  h.inference = () => ({ok: false, status: 400, json: async () => ({detail: "PRIVATE generated payload"})});
+  const result = await h.send();
+  assert.equal(result.errorCode, "invalid_response");
+  assert.equal(result.stopQueue, false);
+  assert.doesNotMatch(result.error, /PRIVATE/);
+});
+
+test("provider permission failure does not revoke valid model management pairing", async () => {
+  const h = harness({modelAccess: true}); await settle();
+  h.state.modelRequest = path => path.endsWith("/models") ? {ok: false, status: 403,
+    json: async () => ({detail: {code: "permission_required"}})} : undefined;
+  await h.elements["model-reload"].click();
+  assert.match(h.elements["model-status"].textContent, /ตรวจสิทธิ์/);
+  assert.doesNotMatch(h.elements["model-status"].textContent, /จับคู่ใหม่/);
+  h.state.modelRequest = null;
+  await h.elements["model-reload"].click();
+  assert.equal(h.elements["model-select"].disabled, false);
+});
 
 test("worker submits a reader request only for the active source page", async () => {
   const h = workerHarness();

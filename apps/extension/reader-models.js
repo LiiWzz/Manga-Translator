@@ -129,7 +129,8 @@ class ReaderModelPicker {
       this.version = null;
       this.uncertain = false;
       this.message = !this.canManage ? "การจับคู่เดิมใช้แปลได้ เปิด Settings เพื่ออนุญาตการเปลี่ยนโมเดล"
-        : !data.connected || !data.plan_usage_enabled ? "เชื่อมต่อและอนุญาต ChatGPT ใน Settings ก่อน"
+        : data.reconnect_required ? CONNECTION_ERRORS.reconnect_required[0]
+          : !data.connected || !data.plan_usage_enabled ? "เชื่อมต่อและอนุญาต ChatGPT ใน Settings ก่อน"
           : "เปิดรายการเพื่อเลือกโมเดลที่บัญชีนี้ใช้ได้";
     } catch {
       if (epoch === this.epoch) {
@@ -159,12 +160,12 @@ class ReaderModelPicker {
       }
       const response = await this.request("/api/v1/settings/models", token);
       if (epoch !== this.epoch) return;
-      if (response.status === 401 || response.status === 403) {
-        this.canManage = false;
-        this.message = "สิทธิ์จัดการโมเดลใช้ไม่ได้แล้ว เปิด Settings เพื่อจับคู่ใหม่";
-        return;
+      if (!response.ok) {
+        const error = await connectionFailure(response);
+        if (epoch !== this.epoch) return;
+        if (error.code === "pairing_required") this.canManage = false;
+        throw error;
       }
-      if (!response.ok) throw new Error("catalog");
       const data = await response.json();
       if (epoch !== this.epoch) return;
       if (!Array.isArray(data.models) || !/^[a-f0-9]{64}$/.test(data.version) || data.models.some(model =>
@@ -176,8 +177,9 @@ class ReaderModelPicker {
       this.uncertain = false;
       this.message = data.models.length ? "พบ " + data.models.length + " โมเดลจากบัญชีนี้ เลือกแล้วบันทึกทันที ใช้กับการแปลครั้งถัดไป"
         : "บัญชีนี้ยังไม่มีโมเดลให้เลือก ลองโหลดใหม่หรือเปิด Settings";
-    } catch {
-      if (epoch === this.epoch) this.message = "โหลดรายการไม่สำเร็จ คำแปลเดิมยังอยู่ ตรวจการเชื่อมต่อแล้วกดโหลดรายการใหม่";
+    } catch (error) {
+      if (epoch === this.epoch) this.message = "โหลดรายการไม่สำเร็จ คำแปลเดิมยังอยู่ " +
+        (error.code ? error.message : "ตรวจการเชื่อมต่อแล้วกดโหลดรายการใหม่");
     } finally {
       this.loading = false;
       this.render();
@@ -198,14 +200,18 @@ class ReaderModelPicker {
       const response = await this.request("/api/v1/settings/model", token, {method: "POST", headers: {"Content-Type": "application/json"},
         body: JSON.stringify({slug, version: this.version})});
       if (epoch !== this.epoch) return;
-      if (response.status === 401 || response.status === 403) this.canManage = false;
       if (response.status === 409) {
         this.message = "บัญชีหรือโมเดลถูกเปลี่ยนจากที่อื่น กดโหลดรายการใหม่ก่อนเลือกอีกครั้ง";
         this.uncertain = true;
         this.version = null;
         return;
       }
-      if (!response.ok) throw new Error("save");
+      if (!response.ok) {
+        const error = await connectionFailure(response);
+        if (epoch !== this.epoch) return;
+        if (error.code === "pairing_required") this.canManage = false;
+        throw error;
+      }
       const data = await response.json();
       if (epoch !== this.epoch) return;
       if (data.model !== slug || !/^[a-f0-9]{64}$/.test(data.version)) throw new Error("save");

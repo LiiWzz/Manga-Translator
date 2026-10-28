@@ -33,8 +33,8 @@ starting translation during a model save. Real Chrome acceptance is pending.
 
 ```sh
 git fetch origin
-git switch fix/settings-account-model-consistency
-git pull origin fix/settings-account-model-consistency
+git switch fix/settings-connection-recovery
+git pull origin fix/settings-connection-recovery
 ```
 
 Check `.env`, or create it with `cp .env.example .env`. Make sure it contains:
@@ -98,6 +98,12 @@ Terminal refresh failures offer reconnection with the saved registration;
 temporary provider/network failures preserve credentials. The API returns safe
 error categories and the model associated with a validated Reader result.
 Installed Chrome/OAuth acceptance of this follow-up remains pending.
+
+Options and Reader now distinguish expired connections, plan permission,
+usage limits, unsupported capabilities and temporary provider failures. Reader
+stops unsent queue items for account/usage/model-wide failures and offers a
+Settings or Usage action. Ordinary image errors still have explicit retries.
+The extension displays app-owned recovery text rather than raw provider errors.
 
 ## Architecture
 

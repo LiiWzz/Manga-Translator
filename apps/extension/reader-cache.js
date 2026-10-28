@@ -19,6 +19,7 @@ class ReaderCache {
     if (!value || !Array.isArray(value.regions) || value.regions.length > 40) throw new Error("Invalid cached dialogue");
     return {
       image_width: Number(value.image_width) || 0, image_height: Number(value.image_height) || 0,
+      model: typeof value.model === "string" && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/.test(value.model) ? value.model : null,
       regions: value.regions.map(row => {
         if (typeof row?.source_text !== "string" || typeof row.translated_text !== "string" ||
             row.source_text.length > 700 || row.translated_text.length > 1000) throw new Error("Invalid cached dialogue");

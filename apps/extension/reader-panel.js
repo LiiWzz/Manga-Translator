@@ -188,6 +188,10 @@ function renderImage(record) {
     heading.append(badge);
   }
   record.card.replaceChildren(heading);
+  if (["success", "empty"].includes(record.state)) {
+    record.card.append(element("div", "image-notice", record.model === "mock-demo" ? "[DEMO] ข้อความตัวอย่าง ไม่ใช่คำแปลจากภาพ"
+      : record.model ? "โมเดลของคำแปลนี้: " + record.model : "คำแปลเดิม: ไม่ทราบโมเดลที่ใช้"));
+  }
   if (record.notice) record.card.append(element("div", "image-notice", record.notice));
   if (record.state === "success") {
     const locate = element("button", "locate-button", "ไปยังภาพ");
@@ -273,6 +277,7 @@ async function translateRecord(run, record) {
   } else {
     if (/^[a-f0-9]{64}$/.test(reply.data.profile)) run.profile = reply.data.profile;
     record.regions = regions;
+    record.model = typeof reply.data.model === "string" ? reply.data.model : null;
     record.state = regions.length ? "success" : "empty";
     record.cacheKey = reply.data.cache_key;
     record.cacheEpoch = reply.data.cache_epoch;

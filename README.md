@@ -33,8 +33,8 @@ starting translation during a model save. Real Chrome acceptance is pending.
 
 ```sh
 git fetch origin
-git switch fix/settings-connection-recovery
-git pull origin fix/settings-connection-recovery
+git switch feat/reader-translation-model-labels
+git pull origin feat/reader-translation-model-labels
 ```
 
 Check `.env`, or create it with `cp .env.example .env`. Make sure it contains:
@@ -104,6 +104,11 @@ usage limits, unsupported capabilities and temporary provider failures. Reader
 stops unsent queue items for account/usage/model-wide failures and offers a
 Settings or Usage action. Ordinary image errors still have explicit retries.
 The extension displays app-owned recovery text rather than raw provider errors.
+
+The Reader picker is labeled **แปลครั้งถัดไป**. Each result retains its source
+model through model changes, edits and cache reloads. Older cached results with
+no model metadata display an unknown-model label; they are never assigned the
+currently selected model. Mock results are visibly marked as generated demo text.
 
 ## Architecture
 

@@ -19,6 +19,7 @@ let activeRun = null;
 let pendingPermission = null;
 let clearing = false;
 let appearanceTouched = false;
+let modelPicker = null;
 const appearance = {theme: "light", fontSize: 19, showSource: false};
 
 function applyAppearance() {
@@ -57,9 +58,12 @@ function updateReaderUi() {
   sourceLabel.textContent = source ? new URL(source.url).hostname : "เลือกแท็บมังงะเพื่อเริ่มอ่าน";
 }
 function setScanDisabled(disabled) {
-  scanButton.disabled = disabled;
-  scanButton.setAttribute("aria-busy", String(disabled));
+  scanButton.disabled = disabled || Boolean(modelPicker?.saving);
+  scanButton.setAttribute("aria-busy", String(scanButton.disabled));
+  grantButton.disabled = Boolean(modelPicker?.saving);
+  clearButton.disabled = clearing || Boolean(modelPicker?.saving);
   items.setAttribute("aria-busy", String(Boolean(activeRun)));
+  modelPicker?.setReaderBusy(Boolean(activeRun) || clearing);
 }
 
 function show(message) { status.textContent = message; }
@@ -207,7 +211,7 @@ function renderImage(record) {
     record.card.append(element("div", "image-status", messages[record.state]));
     if (record.state === "error") {
       const retry = element("button", "retry-button", "ลองใหม่");
-      retry.disabled = Boolean(activeRun);
+      retry.disabled = Boolean(activeRun) || Boolean(modelPicker?.saving);
       retry.addEventListener("click", () => scan(record));
       record.card.append(retry);
     }
@@ -243,7 +247,7 @@ async function translateRecord(run, record) {
   try {
     reply = await chrome.runtime.sendMessage({
       type: "MANGA_READER_TRANSLATE", url: record.url, tabId: source.id,
-      pageUrl: source.url, context: previousContext(record)
+      pageUrl: source.url, context: previousContext(record), profile: run.profile || ""
     });
   } catch (error) {
     reply = {ok: false, error: error.message || String(error)};
@@ -254,7 +258,9 @@ async function translateRecord(run, record) {
     !r || typeof r.source_text !== "string" || typeof r.translated_text !== "string")) {
     record.state = "error";
     record.error = reply?.error || "ข้อมูลคำแปลไม่ถูกต้อง กรุณาลองใหม่";
+    run.settingsChanged = Boolean(reply?.settingsChanged);
   } else {
+    if (/^[a-f0-9]{64}$/.test(reply.data.profile)) run.profile = reply.data.profile;
     record.regions = regions;
     record.state = regions.length ? "success" : "empty";
     record.cacheKey = reply.data.cache_key;
@@ -266,7 +272,7 @@ async function translateRecord(run, record) {
 }
 
 async function scan(retryRecord = null) {
-  if (activeRun || clearing) return;
+  if (activeRun || clearing || modelPicker?.saving) return;
   if (items.querySelector("textarea")) { show("บันทึกหรือยกเลิกคำแก้ไขก่อนแปลภาพถัดไป"); return; }
   // Capture the generation before the first await, including tab/permission setup.
   const run = {generation};
@@ -330,8 +336,20 @@ async function scan(retryRecord = null) {
     for (const record of queue) {
       if (!current(run)) break;
       await translateRecord(run, record);
+      if (!current(run)) break;
+      if (run.settingsChanged) {
+        for (const remaining of queue) if (remaining.state === "queued") {
+          remaining.state = "error";
+          remaining.error = "ยังไม่ได้ส่งแปล เนื่องจากโมเดลหรือการตั้งค่าเปลี่ยนแล้ว";
+          renderImage(remaining);
+        }
+        break;
+      }
     }
-    if (current(run)) showSummary();
+    if (current(run)) {
+      if (run.settingsChanged) show("โมเดลหรือการตั้งค่าเปลี่ยนแล้ว หยุดคิวไว้ กดลองใหม่ทีละภาพเมื่อพร้อม");
+      else showSummary();
+    }
   } catch (error) {
     if (current(run)) show(error.message || String(error));
   } finally {
@@ -340,6 +358,7 @@ async function scan(retryRecord = null) {
       activeRun = null;
       setScanDisabled(false);
       updateRetryButtons();
+      if (run.settingsChanged) modelPicker?.refreshStatus();
     }
   }
 }
@@ -383,7 +402,7 @@ chrome.tabs.onRemoved.addListener(tabId => {
 });
 document.getElementById("reset").addEventListener("click", () => reset("เริ่มใหม่แล้ว"));
 clearButton.addEventListener("click", async () => {
-  if (clearing) return;
+  if (clearing || modelPicker?.saving) return;
   clearing = true;
   clearButton.disabled = true;
   reset("กำลังลบคำแปลและคำแก้ไขที่บันทึกไว้…");
@@ -412,3 +431,7 @@ menu.addEventListener("keydown", event => {
   if (event.key === "Escape") { menu.open = false; menu.querySelector("summary")?.focus(); }
 });
 updateReaderUi();
+modelPicker = new ReaderModelPicker({onBusyChange: () => {
+  setScanDisabled(Boolean(activeRun) || clearing);
+  updateRetryButtons();
+}});

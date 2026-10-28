@@ -40,15 +40,20 @@ class Element {
   async click() {
     if (!this.disabled) await Promise.all((this.listeners.click || []).map(fn => fn()));
   }
+  async emit(name, event = {}) { await Promise.all((this.listeners[name] || []).map(fn => fn(event))); }
   querySelector(tag) { return descendants(this).find(el => el.tagName === tag) || null; }
 }
 function descendants(el) { return el.children.flatMap(child => [child, ...descendants(child)]); }
-function harness({savedAppearance} = {}) {
+function harness({savedAppearance, modelAccess = false} = {}) {
   const elements = Object.fromEntries(["status", "items", "scan", "grant", "reset", "settings", "clear-cache",
-    "empty-state", "reading-count", "source-label", "reader-menu", "show-source", "theme", "font-smaller", "font-larger"].map(id => [id, new Element()]));
+    "empty-state", "reading-count", "source-label", "reader-menu", "show-source", "theme", "font-smaller", "font-larger",
+    "model-picker", "model-summary", "model-current", "model-select", "model-reload", "model-status", "model-settings"].map(id => [id, new Element()]));
   const root = new Element("html");
   const state = {
     savedAppearance,
+    credentials: modelAccess ? {mangaCapability: "generated-reader", mangaSettingsCapability: "generated-manager"} : {},
+    model: "vision-a", modelVersion: "a".repeat(64), modelCalls: [], windowEvents: {},
+    catalog: [{slug: "vision-a", display_name: "Vision A"}, {slug: "vision-b", display_name: "Vision B"}],
     tab: {id: 1, windowId: 1, url: "https://reader.example/chapter/1"},
     images: [{index: 0, url: "https://reader.example/1.png"}],
     calls: [],
@@ -68,7 +73,8 @@ function harness({savedAppearance} = {}) {
     permissions: {contains: () => state.permission(), request: () => state.requestPermission()},
     scripting: {executeScript: () => state.inject()},
     storage: {onChanged: event(), local: {
-      get: async () => ({mangaReaderAppearance: state.savedAppearance}),
+      setAccessLevel: async () => {},
+      get: async () => ({mangaReaderAppearance: state.savedAppearance, ...state.credentials}),
       set: async ({mangaReaderAppearance}) => { state.savedAppearance = mangaReaderAppearance; }
     }},
     runtime: {
@@ -80,13 +86,30 @@ function harness({savedAppearance} = {}) {
       openOptionsPage() {}
     }
   };
-  vm.runInNewContext(fs.readFileSync("apps/extension/reader-panel.js", "utf8"), {
-    chrome, URL, document: {documentElement: root, getElementById: id => elements[id], createElement: tag => new Element(tag)}
+  const fetch = async (url, options = {}) => {
+    const path = new URL(url).pathname;
+    state.modelCalls.push({path, options});
+    if (state.modelRequest) { const result = await state.modelRequest(path, options); if (result) return result; }
+    const response = body => ({ok: true, status: 200, json: async () => body});
+    if (path === "/api/v1/provider/status") return response({connected: true, plan_usage_enabled: true, model: state.model});
+    if (path === "/api/v1/settings/models") return response({models: state.catalog, model: state.model, version: state.modelVersion});
+    if (path === "/api/v1/settings/model") {
+      state.model = JSON.parse(options.body).slug;
+      state.modelVersion = "b".repeat(64);
+      return response({model: state.model, version: state.modelVersion});
+    }
+    throw new Error("Unexpected model request");
+  };
+  vm.runInNewContext(fs.readFileSync("apps/extension/reader-models.js", "utf8") + "\n" + fs.readFileSync("apps/extension/reader-panel.js", "utf8"), {
+    chrome, URL, AbortSignal, fetch, window: {addEventListener(name, handler) { (state.windowEvents[name] ||= event()).addListener(handler); }},
+    document: {documentElement: root, getElementById: id => elements[id], createElement: tag => new Element(tag)}
   });
   return {
     state, chrome, elements, root,
     scan: () => elements.scan.click(),
     reset: () => elements.reset.click(),
+    async openModels() { elements["model-picker"].open = true; await elements["model-picker"].emit("toggle"); await settle(); },
+    async chooseModel(slug) { elements["model-select"].value = slug; await elements["model-select"].emit("change"); await settle(); },
     text: () => elements.items.textContent,
     retry: () => descendants(elements.items).find(el => el.tagName === "button" && el.textContent === "ลองใหม่")?.click()
   };
@@ -596,4 +619,167 @@ test("reset from the menu closes it without deleting saved dialogue", async () =
   await h.reset();
   assert.equal(h.elements["reader-menu"].open, false);
   assert.equal(mutations, 0);
+});
+
+test("Reader shows its current model and loads account choices only on request", async () => {
+  const h = harness({modelAccess: true}); await settle();
+  assert.equal(h.elements["model-current"].textContent, "vision-a");
+  assert.equal(h.state.modelCalls.length, 1);
+  await h.openModels();
+  assert.equal(h.elements["model-current"].textContent, "Vision A");
+  assert.equal(h.elements["model-select"].disabled, false);
+  assert.equal(h.elements["model-select"].value, "vision-a");
+  assert.equal(h.state.calls.length, 0, "model metadata never submits inference");
+});
+
+test("switching models preserves dialogue and unsaved edits without inference", async () => {
+  const h = harness({modelAccess: true}); await settle(); await h.scan();
+  await descendants(h.elements.items).find(el => el.textContent === "แก้คำแปล").click();
+  const editor = h.elements.items.querySelector("textarea"); editor.value = "คำแก้ไขที่ยังไม่บันทึก";
+  await h.openModels(); await h.chooseModel("vision-b");
+  assert.equal(h.elements["model-current"].textContent, "Vision B");
+  assert.equal(h.state.model, "vision-b");
+  assert.equal(h.state.calls.length, 1);
+  assert.equal(h.elements.items.querySelector("textarea"), editor);
+  assert.equal(editor.value, "คำแก้ไขที่ยังไม่บันทึก");
+  assert.match(h.text(), /สวัสดี/);
+  assert.match(h.elements["model-status"].textContent, /บันทึกโมเดลแล้ว/);
+  const reopened = harness({modelAccess: true}); reopened.state.model = h.state.model; await settle();
+  assert.equal(reopened.elements["model-current"].textContent, "vision-b");
+});
+
+test("switching a model affects only the next user-initiated translation", async () => {
+  const h = harness({modelAccess: true}); await settle();
+  const used = [];
+  h.state.translate = async () => { used.push(h.state.model); return reply(); };
+  await h.scan(); await h.openModels(); await h.chooseModel("vision-b");
+  assert.deepEqual(used, ["vision-a"]);
+  await h.scan();
+  assert.deepEqual(used, ["vision-a", "vision-b"]);
+});
+
+test("model selection is locked for the full translation queue", async () => {
+  const h = harness({modelAccess: true}), pending = deferred(); await settle(); await h.openModels();
+  h.state.translate = () => pending.promise;
+  const run = h.scan(); await settle();
+  assert.equal(h.elements["model-select"].disabled, true);
+  await h.chooseModel("vision-b");
+  assert(!h.state.modelCalls.some(call => call.path.endsWith("/model")));
+  assert.match(h.elements["model-status"].textContent, /รอแปล/);
+  pending.resolve(reply()); await run;
+  assert.equal(h.elements["model-select"].disabled, false);
+});
+
+test("a pending model save blocks scan and retries even after Reader reset", async () => {
+  const h = harness({modelAccess: true}), pending = deferred(); await settle(); await h.openModels();
+  h.state.modelRequest = path => path.endsWith("/model") ? pending.promise : undefined;
+  const change = h.chooseModel("vision-b"); await settle();
+  assert.equal(h.elements.scan.disabled, true);
+  assert.equal(h.elements.grant.disabled, true);
+  assert.equal(h.elements["clear-cache"].disabled, true);
+  await h.scan(); await h.reset();
+  assert.equal(h.elements.scan.disabled, true);
+  assert.equal(h.state.calls.length, 0);
+  pending.resolve({ok: true, status: 200, json: async () => ({model: "vision-b", version: "b".repeat(64)})});
+  await change;
+  assert.equal(h.elements.scan.disabled, false);
+  assert.equal(h.elements["model-current"].textContent, "Vision B");
+});
+
+test("model catalog failure preserves the reading session and offers manual reload", async () => {
+  const h = harness({modelAccess: true}); await settle(); await h.scan();
+  h.state.modelRequest = path => path.endsWith("/models") ? {ok: false, status: 502} : undefined;
+  await h.openModels();
+  assert.match(h.elements["model-status"].textContent, /โหลดรายการไม่สำเร็จ/);
+  assert.match(h.text(), /สวัสดี/);
+  assert.equal(h.elements["model-select"].disabled, true);
+  h.state.modelRequest = null; await h.elements["model-reload"].click();
+  assert.equal(h.elements["model-select"].disabled, false);
+});
+
+for (const code of [409, 502]) test("model save failure " + code + " never claims a new selected model", async () => {
+  const h = harness({modelAccess: true}); await settle(); await h.openModels();
+  h.state.modelRequest = path => path.endsWith("/model") ? {ok: false, status: code} : undefined;
+  await h.chooseModel("vision-b");
+  assert.equal(h.state.model, "vision-a");
+  assert.equal(h.elements["model-current"].textContent, "ตรวจโมเดลอีกครั้ง");
+  assert.equal(h.elements["model-select"].value, "vision-a");
+  assert.equal(h.elements["model-select"].disabled, true);
+  assert.doesNotMatch(h.elements["model-status"].textContent, /บันทึกโมเดลแล้ว/);
+});
+
+test("legacy pairing shows the model but requires explicit management pairing to change it", async () => {
+  const h = harness({modelAccess: true}); delete h.state.credentials.mangaSettingsCapability; await settle();
+  await h.openModels();
+  assert.equal(h.elements["model-current"].textContent, "vision-a");
+  assert.equal(h.elements["model-settings"].hidden, false);
+  assert.equal(h.elements["model-select"].disabled, true);
+  assert(!h.state.modelCalls.some(call => call.path.includes("/settings/")));
+});
+
+test("credential changes discard a late model save and disable old authority", async () => {
+  const h = harness({modelAccess: true}), pending = deferred(); await settle(); await h.openModels();
+  h.state.modelRequest = path => path.endsWith("/model") ? pending.promise : undefined;
+  const change = h.chooseModel("vision-b"); await settle();
+  h.state.credentials = {};
+  await h.chrome.storage.onChanged.emit({mangaSettingsCapability: {}}, "local");
+  pending.resolve({ok: true, status: 200, json: async () => ({model: "vision-b", version: "b".repeat(64)})});
+  await change; await settle();
+  assert.equal(h.elements["model-current"].textContent, "ยังไม่ได้เลือก");
+  assert.equal(h.elements["model-select"].disabled, true);
+  assert.equal(h.elements.scan.disabled, false);
+  assert.doesNotMatch(h.elements["model-status"].textContent, /บันทึกโมเดลแล้ว/);
+});
+
+test("a model changed from elsewhere stops the queue without submitting remaining images", async () => {
+  const h = harness();
+  h.state.images.push({index: 1, url: "https://reader.example/2.png"}, {index: 2, url: "https://reader.example/3.png"});
+  h.state.translate = async message => {
+    if (message.url.endsWith("1.png")) return {ok: true, data: {...reply().data, profile: "1".repeat(64)}};
+    assert.equal(message.profile, "1".repeat(64));
+    return {ok: false, settingsChanged: true, error: "Settings changed"};
+  };
+  await h.scan();
+  assert.equal(h.state.calls.length, 2);
+  assert.match(h.text(), /สวัสดี/);
+  assert.match(h.text(), /ยังไม่ได้ส่งแปล/);
+  assert.match(h.elements.status.textContent, /หยุดคิว/);
+  assert.equal(h.elements.scan.disabled, false);
+});
+
+test("worker exposes the validated profile and refuses a changed model before inference or cache reuse", async () => {
+  const worker = workerHarness();
+  const original = await worker.send();
+  assert.equal(original.data.profile, worker.profile);
+  const reused = await worker.send();
+  assert.equal(reused.data.cache_hit, true);
+  assert.equal(reused.data.profile, worker.profile);
+  worker.message.profile = worker.profile;
+  worker.profile = "2".repeat(64);
+  const changed = await worker.send();
+  assert.equal(changed.ok, false);
+  assert.equal(changed.settingsChanged, true);
+  assert.equal(worker.fetched.filter(url => url.endsWith("/translate")).length, 1);
+});
+
+test("opening the picker during the initial status request still loads its catalog afterwards", async () => {
+  const h = harness({modelAccess: true}), pending = deferred();
+  h.state.modelRequest = path => path === "/api/v1/provider/status" ? pending.promise : undefined;
+  await h.openModels();
+  assert.equal(h.elements["model-select"].disabled, true);
+  pending.resolve({ok: true, status: 200, json: async () => ({connected: true, plan_usage_enabled: true, model: "vision-a"})});
+  await settle();
+  assert.equal(h.elements["model-select"].disabled, false);
+  assert(h.state.modelCalls.some(call => call.path.endsWith("/models")));
+});
+
+test("a provider-side settings conflict stops the Reader before its next queued inference", async () => {
+  const worker = workerHarness(), h = harness();
+  worker.inference = () => ({ok: false, status: 409, text: async () => 'Reader settings changed during translation'});
+  h.state.images.push({index: 1, url: "https://reader.example/2.png"}, {index: 2, url: "https://reader.example/3.png"});
+  h.chrome.runtime.sendMessage = message => worker.send(message);
+  await h.scan();
+  assert.equal(worker.fetched.filter(url => url.endsWith("/translate")).length, 1);
+  assert.match(h.text(), /ยังไม่ได้ส่งแปล/);
+  assert.match(h.elements.status.textContent, /หยุดคิว/);
 });

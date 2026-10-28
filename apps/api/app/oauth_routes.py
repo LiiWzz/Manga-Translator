@@ -5,8 +5,8 @@ import secrets
 import time
 from fastapi import APIRouter, Request, HTTPException, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
-from pydantic import BaseModel
-from .siwc import auth, AuthError
+from pydantic import BaseModel, Field
+from .siwc import auth, AuthError, ModelSelectionChanged
 from .settings_ui import settings_page, shell
 from .local_security import security, check_host, check_extension_origin, require_extension_identity, check_local_browser_request
 
@@ -107,6 +107,43 @@ async def settings_ticket(request: Request):
     _settings_tickets[hashlib.sha256(ticket.encode()).hexdigest()] = {
         "origin": origin, "generation": generation, "expires": now + TICKET_TTL}
     return JSONResponse({"ticket": ticket}, headers=HEADERS)
+
+
+@router.get("/api/v1/settings/models")
+async def extension_models(request: Request):
+    _, generation = _management_generation(request)
+    version = auth.model_selection_version()
+    try:
+        models = await auth.models()
+    except AuthError:
+        raise HTTPException(status_code=502, detail="Could not load account models")
+    if generation != _management_generation(request)[1]:
+        raise HTTPException(status_code=401, detail="Settings permission changed")
+    if version != auth.model_selection_version():
+        raise HTTPException(status_code=409, detail="Account or model changed; reload the model list")
+    return JSONResponse({"models": models, "model": auth.status()["model"], "version": version}, headers=HEADERS)
+
+
+class ModelSelectionBody(BaseModel):
+    slug: str
+    version: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+@router.post("/api/v1/settings/model")
+async def extension_model(request: Request, payload: ModelSelectionBody):
+    _, generation = _management_generation(request)
+
+    def still_authorized():
+        if generation != _management_generation(request)[1]:
+            raise HTTPException(status_code=401, detail="Settings permission changed")
+
+    try:
+        await auth.select_model(payload.slug, expected_version=payload.version, authorize=still_authorized)
+    except ModelSelectionChanged:
+        raise HTTPException(status_code=409, detail="Account or model changed; reload the model list")
+    except AuthError:
+        raise HTTPException(status_code=502, detail="Could not select model; reload the model list")
+    return JSONResponse({"model": auth.status()["model"], "version": auth.model_selection_version()}, headers=HEADERS)
 
 
 @router.post("/auth/extension-session")

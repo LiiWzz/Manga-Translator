@@ -41,6 +41,16 @@
         <button id="font-larger" type="button" aria-label="เพิ่มขนาดตัวอักษร">A+</button>
       </div>
     </div>
+    <details id="model-picker" class="model-picker">
+      <summary id="model-summary" class="model-summary" aria-label="เลือกโมเดลแปลภาพ"><span class="model-caption">โมเดล</span><span id="model-current">กำลังตรวจ…</span><span class="model-chevron" aria-hidden="true">⌄</span></summary>
+      <div class="model-picker-content">
+        <label for="model-select">โมเดลที่บัญชีนี้ใช้ได้</label>
+        <div class="model-controls"><select id="model-select" disabled><option value="">เลือกโมเดล</option></select><button id="model-reload" type="button">โหลดใหม่</button></div>
+        <p id="model-status" role="status" aria-live="polite">เปิดรายการเพื่อเปลี่ยนโมเดล</p>
+        <p class="model-help">เลือกโมเดลที่รองรับภาพ รายการนี้ยังไม่ยืนยันความสามารถด้านภาพหรือโควตาคงเหลือ</p>
+        <button id="model-settings" type="button" hidden>เปิด Settings และการจับคู่</button>
+      </div>
+    </details>
   </header>
   <main class="reader-content" aria-label="คำแปลมังงะ">
     <section id="empty-state" class="empty-state">
@@ -60,6 +70,7 @@
     <button id="grant" class="permission-button" type="button" hidden>อนุญาตเว็บไซต์</button>
     <button id="scan" class="primary-button" type="button" aria-busy="false"><svg class="icon" aria-hidden="true"><use href="#icon-scan"/></svg><span>แปลภาพที่เห็น</span><span class="button-arrow" aria-hidden="true">→</span></button>
   </footer>
+  <script src="reader-models.js"></script>
   <script src="reader-panel.js"></script>
 </body>
 </html>

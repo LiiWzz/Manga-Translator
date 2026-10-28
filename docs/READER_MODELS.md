@@ -1,0 +1,107 @@
+# Change models from Reader
+
+Implemented 2026-10-28, stacked on Settings PR #10. This adds a model control to
+the Reader header without changing the Reader roadmap milestone order.
+
+## Workflow
+
+1. Open Reader. The compact model row reads the gateway's saved selection without
+   calling inference or the provider's model catalog.
+2. Open the model row to load the account's available models. Choose one in the
+   dropdown; it saves immediately after the backend acknowledges it. A **โหลดใหม่**
+   button refreshes the list. Escape closes the picker and focuses its summary.
+3. Existing dialogue, corrections and an unsaved editor remain in place. Selecting
+   a model does not submit any images, clear cache or automatically retranslate.
+4. The next explicit scan/retry uses the backend selection. Existing cache keys
+   include the model, so that scan can retranslate visible images when their
+   previous result is from another model. Returning to a previously used model
+   may reuse its still-valid exact-input cache. Corrections remain associated
+   with the original cached result; they are not silently transferred to a
+   different model's output.
+
+The selection is global to this local, single-user gateway. Another Reader or
+the local Settings page can change it. Focus refreshes the status, and opening
+the picker refreshes the catalog. Slugs are shown until a catalog supplies their
+display names. No speed, quality, vision-support or remaining-quota badges are
+invented from incomplete catalog metadata.
+
+## Busy and error behavior
+
+- A running Reader queue disables selection/reload. Starting translation closes
+  the picker so it does not cover dialogue; reopening shows why it is locked.
+- A model save disables scan, retries, permission grants and cache clearing in
+  that panel until it finishes. Reset/navigation cannot unlock an in-flight save.
+- Failed or ambiguous saves never claim a new model was selected. The header
+  asks to verify the model, and reloading obtains the actual saved value before
+  another selection. Dialogue remains visible; no automatic retries are sent.
+- Catalog failures and empty catalogs offer reload and Settings access. Legacy
+  reader-only pairing can still read/translate but needs explicit management
+  pairing to list or change models. Revoked credentials cannot change selection.
+- Each queue carries the first validated result's opaque translation profile
+  into subsequent image requests. If settings change elsewhere, the worker
+  rejects the mismatch before inference/cache reuse and stops the queue. An
+  in-flight HTTP 409 also stops remaining submissions. Unsent queued images
+  become visible errors; use their explicit retry buttons when ready.
+- Reset/navigation still discards obsolete results. Already submitted provider
+  inference may complete and consume usage; this feature does not cancel it.
+
+## Authority and concurrency
+
+`GET /api/v1/settings/models` and `POST /api/v1/settings/model` require the separate
+management capability issued by pair-once setup and a valid extension Origin.
+The local pairing credential never contains an OpenAI token. Chrome permissions,
+origin scope, inference admission and image limits remain unchanged.
+
+Catalogs include an opaque version of the account identity, permissions and
+selected model. Saves revalidate membership, account/version and current
+management authority immediately before writing, after the provider round trip.
+A stale choice gets HTTP 409 rather than overwriting a newer Settings choice.
+Token refresh alone does not invalidate the version. All of this retains the
+single-worker local POC assumption.
+
+## Verification
+
+- Mocked API suite: **120 passed**, one existing dependency deprecation warning.
+  New checks cover management-only access, forbidden origins, catalog privacy,
+  successful selection/profile invalidation, stale/concurrent account changes,
+  revocation during provider I/O and token-refresh stability. The isolated test
+  container has networking disabled and fresh temporary credential storage.
+- Extension wiring and behavior/cache/Settings regressions: **96 passed**,
+  including 14 new model/queue tests. They cover retained dialogue/unsaved edits,
+  no automatic inference, mutual exclusion, save failures, legacy/revoked
+  credentials, initial-load races, cross-panel profile changes and HTTP 409 queue
+  stopping. Syntax, manifest JSON and diff checks pass.
+- BrowserOS neo ran the real Reader, worker, cache and model-picker scripts with
+  generated Chrome/provider/image data. Switching models kept the displayed
+  dialogue and inference count unchanged at one. Pending save disabled scan;
+  pending inference disabled model selection; both recovered after completion.
+- Widths 280/320/360/480 px at 640 px height, including maximum 25 px Thai text:
+  no document horizontal overflow, the picker stayed within the viewport and
+  the translate button remained visible. Escape returned focus to the summary.
+  Light/dark screenshots contain generated dialogue and model names only.
+- These previews do not establish installed Chrome extension behavior, real
+  account model availability, vision compatibility or live translation quality.
+  Keep the stacked PR Draft until actual Chrome acceptance and review.
+
+| Select and save | Continue reading |
+| --- | --- |
+| ![Model picker](assets/reader-model-picker-light.png) | ![Reader model row](assets/reader-model-picker-dark.png) |
+
+## Actual Chrome acceptance
+
+1. Update this feature branch's gateway with `docker compose up --build -d api`;
+   reload the unpacked extension and reopen Reader. Complete management pairing
+   from Settings if the existing credential is reader-only.
+2. Open the model row and choose an account model that supports images. Confirm
+   save feedback and no automatic translation. Retry list loading on failure.
+3. With dialogue visible, start an edit, change models and verify the draft is
+   retained. Save/cancel the edit, then explicitly translate and verify the new
+   model is used. Reopen the panel to confirm the backend selection is retained.
+4. Confirm selection is disabled while translating and translation is disabled
+   during model save. Reset during save must not start an overlapping scan.
+5. Change the model from another Settings tab while a multi-image queue is
+   running. Confirm the current conflicting result is rejected and remaining
+   inference stops, with visible retryable errors. Earlier accepted results stay.
+6. Test stale selection, permission revocation, gateway offline and a narrow
+   panel with large Thai text. Do not include credentials or callback URLs in
+   reports. Review and merge remain explicit human actions.

@@ -1,2 +1,65 @@
-<!doctype html><html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Manga Thai Reader</title><style>
-body{font:14px/1.55 system-ui,sans-serif;margin:0;background:#151820;color:#f4f4f7}header{position:sticky;top:0;background:#202735;padding:12px;z-index:2;box-shadow:0 1px 5px #0008}h1{font-size:17px;margin:0 0 8px}button{background:#405ee0;color:white;border:0;border-radius:7px;padding:8px 10px;cursor:pointer}button:disabled{opacity:.4}#status{font-size:12px;margin:7px 0}#items{padding:10px;display:grid;gap:10px}.item{background:#242938;border-radius:10px;padding:12px;border:1px solid #393d4b}.source{font-size:12px;color:#afb9cc;white-space:pre-wrap}.translation{margin:8px 0;white-space:pre-wrap;font-size:17px}.tools{display:flex;gap:6px;flex-wrap:wrap}textarea{width:100%;box-sizing:border-box;min-height:55px;background:#10131b;color:white;border:1px solid #6d7a9c;border-radius:5px;padding:8px}small{color:#bdc7d8}</style></head><body><header><h1>Manga Thai Reader <small>v0.4</small></h1><div class="tools"><button id="scan">แปลภาพที่เห็น</button><button id="grant" hidden>อนุญาตเว็บไซต์</button><button id="reset">เริ่มใหม่</button><button id="clear-cache">ลบคำแปลที่บันทึกไว้</button><button id="settings">ตั้งค่า</button></div><small>เก็บคำแปลและคำแก้ไขในเครื่องสูงสุด 7 วัน · เริ่มใหม่ไม่ลบข้อมูลที่บันทึกไว้</small><div id="status" role="status">พร้อมใช้งาน</div></header><main id="items"></main><script src="reader-panel.js"></script></body></html>
+<!doctype html>
+<html lang="th" data-theme="light" data-source="hidden">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Manga Thai Reader</title>
+  <link rel="stylesheet" href="reader-panel.css">
+</head>
+<body>
+  <svg class="icon-library" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="icon-book" viewBox="0 0 24 24"><path d="M4 5.5c3-1 5-.5 8 1.5 3-2 5-2.5 8-1.5v13c-3-1-5-.5-8 1.5-3-2-5-2.5-8-1.5zM12 7v13"/></symbol>
+    <symbol id="icon-scan" viewBox="0 0 24 24"><path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4M8 9h8M8 12h6M8 15h4"/></symbol>
+    <symbol id="icon-theme" viewBox="0 0 24 24"><path d="M20.5 13.4A8.8 8.8 0 0 1 10.6 3.5a8.8 8.8 0 1 0 9.9 9.9Z"/></symbol>
+    <symbol id="icon-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+    <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="M7 17 17 7M7 7h10v10"/></symbol>
+  </svg>
+  <header class="panel-header">
+    <div class="brand-row">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"><svg class="icon"><use href="#icon-book"/></svg></span><div><h1>Manga Reader</h1><span class="brand-caption">ENGLISH <span aria-hidden="true">→</span> ไทย</span></div></div>
+      <div class="header-actions">
+        <button id="theme" class="icon-button" type="button" aria-label="โหมดมืด" aria-pressed="false" title="สลับธีมสว่างและมืด"><svg class="icon" aria-hidden="true"><use href="#icon-theme"/></svg></button>
+        <details id="reader-menu" class="reader-menu">
+          <summary class="icon-button" aria-label="เมนู Reader" title="เมนู Reader"><svg class="icon" aria-hidden="true"><use href="#icon-more"/></svg></summary>
+          <div class="menu-content">
+            <span class="menu-heading">จัดการ Reader</span>
+            <button id="settings" type="button">ตั้งค่าและการเชื่อมต่อ</button>
+            <button id="reset" type="button">เริ่มใหม่</button>
+            <p>เริ่มอ่านใหม่ โดยเก็บคำแปลที่บันทึกไว้</p>
+            <div class="menu-divider"></div>
+            <button id="clear-cache" class="danger-button" type="button">ลบคำแปลที่บันทึกไว้</button>
+            <p>ลบคำแปลและคำแก้ไขทุกหน้าในเครื่องนี้<br>ข้อมูลที่บันทึกไว้มีอายุสูงสุด 7 วัน</p>
+          </div>
+        </details>
+      </div>
+    </div>
+    <div class="reading-toolbar" aria-label="ปรับการอ่าน">
+      <button id="show-source" class="source-toggle" type="button" aria-pressed="false" title="แสดงหรือซ่อนต้นฉบับอังกฤษ"><span aria-hidden="true">EN</span> ต้นฉบับ</button>
+      <span id="reading-count" class="reading-count">พร้อมอ่าน</span>
+      <div class="font-controls" role="group" aria-label="ขนาดตัวอักษรไทย">
+        <button id="font-smaller" type="button" aria-label="ลดขนาดตัวอักษร">A−</button>
+        <button id="font-larger" type="button" aria-label="เพิ่มขนาดตัวอักษร">A+</button>
+      </div>
+    </div>
+  </header>
+  <main class="reader-content" aria-label="คำแปลมังงะ">
+    <section id="empty-state" class="empty-state">
+      <div class="empty-art" aria-hidden="true">
+        <svg viewBox="0 0 168 160" fill="none"><rect class="art-back" x="41" y="21" width="94" height="119" rx="12" transform="rotate(9 41 21)"/><rect class="art-page" x="27" y="15" width="99" height="124" rx="12"/><path class="art-line" d="M42 34h31M42 43h20M42 111h57M42 120h36"/><path class="art-bubble" d="M54 59h43a10 10 0 0 1 10 10v14a10 10 0 0 1-10 10H77L64 103V93H54a10 10 0 0 1-10-10V69a10 10 0 0 1 10-10Z"/><text x="57" y="83" class="art-text">ไทย</text><path class="art-spark" d="m132 52 3-8 3 8 8 3-8 3-3 8-3-8-8-3Z"/></svg>
+      </div>
+      <span class="eyebrow">อ่านเรื่องเดิม ในภาษาของคุณ</span>
+      <h2>ช่องต่อไป<br>เข้าใจได้มากขึ้น</h2>
+      <p>เปิดหน้ามังงะให้เห็นภาพที่อยากอ่าน<br>แล้วกดแปลภาพที่เห็นด้านล่าง</p>
+      <span class="empty-note"><span class="small-dot"></span> ภาพต้นฉบับยังคงเหมือนเดิม</span>
+    </section>
+    <div id="items" class="image-list" hidden></div>
+  </main>
+  <footer class="action-dock">
+    <div class="source-context"><span class="small-dot"></span><span id="source-label">เลือกแท็บมังงะเพื่อเริ่มอ่าน</span></div>
+    <p id="status" class="reader-status" role="status" aria-live="polite" aria-atomic="true">แปลเฉพาะภาพที่เห็น ครั้งละไม่เกิน 3 ภาพ</p>
+    <button id="grant" class="permission-button" type="button" hidden>อนุญาตเว็บไซต์</button>
+    <button id="scan" class="primary-button" type="button" aria-busy="false"><svg class="icon" aria-hidden="true"><use href="#icon-scan"/></svg><span>แปลภาพที่เห็น</span><span class="button-arrow" aria-hidden="true">→</span></button>
+  </footer>
+  <script src="reader-panel.js"></script>
+</body>
+</html>

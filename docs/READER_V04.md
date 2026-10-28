@@ -5,6 +5,10 @@ The original image overlay corrupts some dialogue and artwork, especially styliz
 
 ## Workflow
 
+The [Reader layout guide](READER_PANEL_DESIGN.md) describes the redesigned panel:
+Thai-first reading, optional English, font/theme controls and a bottom translate
+button. Settings, reset and clear saved data are in the top-right Reader menu.
+
 1. Connect and pair the extension via Options, as before.
 2. Open a manga webpage and click the extension toolbar button to open the Reader panel. Chrome opens it directly via `sidePanel.setPanelBehavior({openPanelOnActionClick: true})`, so the toolbar click is not delayed by any content-script injection. Clicking **แปลภาพที่เห็น** within the panel injects the read-only scanner. Reload the unpacked extension via `chrome://extensions` after pulling changes. If it still does not open, inspect the extension **Service worker** console and Chrome version/support for the Side Panel API.
 3. Click **แปลภาพที่เห็น**. If prompted, click **อนุญาตเว็บไซต์** and approve Chrome's per-site access; then the extension discovers up to three loaded viewport images and sends them serially to the authenticated local endpoint.

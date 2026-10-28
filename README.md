@@ -33,8 +33,8 @@ starting translation during a model save. Real Chrome acceptance is pending.
 
 ```sh
 git fetch origin
-git switch fix/reader-model-controls
-git pull origin fix/reader-model-controls
+git switch fix/settings-account-model-consistency
+git pull origin fix/settings-account-model-consistency
 ```
 
 Check `.env`, or create it with `cp .env.example .env`. Make sure it contains:
@@ -43,7 +43,9 @@ Check `.env`, or create it with `cp .env.example .env`. Make sure it contains:
 TRANSLATOR_PROVIDER=chatgpt_oauth
 ```
 
-Old `.env` files specifying `mock` or `openai` override the new default.
+The API, Compose and `.env.example` default to `mock`: Reader shows clearly
+marked generated demo text without calling OpenAI. Set `chatgpt_oauth` explicitly
+for real image translation. Existing `.env` values remain authoritative.
 
 ```sh
 docker compose up --build -d
@@ -87,6 +89,15 @@ Settings authority. Old admin-key unlock remains under recovery. See
 [security notes](docs/SECURITY_V031.md).
 
 If sign-in fails, inspect the localhost Settings error. The callback and model discovery have not been verified with a live account in this POC; do not expose secrets in support reports.
+
+Connection/model reliability checks now prevent a late token refresh from
+restoring an older account or model. Browser Settings model forms carry an
+account-selection version and recheck management authority immediately before
+saving. Reload a Settings page opened before this update before saving a model.
+Terminal refresh failures offer reconnection with the saved registration;
+temporary provider/network failures preserve credentials. The API returns safe
+error categories and the model associated with a validated Reader result.
+Installed Chrome/OAuth acceptance of this follow-up remains pending.
 
 ## Architecture
 

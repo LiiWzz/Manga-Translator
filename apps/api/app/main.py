@@ -16,6 +16,7 @@ from .ocr_grouping import extract_grouped_regions, analyze_regions, diagnostic_p
 from .oauth_routes import router as oauth_router
 from .provider_adapter import translate_chatgpt
 from .local_security import require_extension, require_extension_identity
+from .provider_config import provider_name
 
 app = FastAPI(title="Manga Translator POC v0.3")
 logger = logging.getLogger(__name__)
@@ -51,7 +52,7 @@ def extract_regions(image: Image.Image):
 
 
 async def translate_texts(texts: list[str], context: str = "") -> list[str]:
-    provider = os.getenv("TRANSLATOR_PROVIDER", "chatgpt_oauth").lower()
+    provider = provider_name()
     if provider == "chatgpt_oauth":
         return await translate_chatgpt(texts, context=context) if context else await translate_chatgpt(texts)
     if provider == "mock":
@@ -120,14 +121,14 @@ async def _process(file: UploadFile, debug: bool = False):
 
 @app.get("/health")
 def health():
-    return {"status":"ok","provider":os.getenv("TRANSLATOR_PROVIDER","chatgpt_oauth")}
+    return {"status":"ok","provider":provider_name()}
 
 
 @app.post("/api/v1/translate",response_model=TranslateResponse)
 async def translate(file: UploadFile = File(...), gate=Depends(require_extension)):
     image,_,_,regions,_ = await _process(file)
     return TranslateResponse(image_width=image.width,image_height=image.height,regions=regions,
-                             provider=os.getenv("TRANSLATOR_PROVIDER","chatgpt_oauth"))
+                             provider=provider_name())
 
 
 @app.post("/api/v1/translate-rendered",response_model=RenderResponse)
@@ -142,7 +143,7 @@ async def translate_rendered(file: UploadFile = File(...), debug: bool = False, 
     if diagnostic is not None:
         diagnostic["skipped"] = skipped
     return RenderResponse(image_width=image.width,image_height=image.height,regions=regions,
-                          provider=os.getenv("TRANSLATOR_PROVIDER","chatgpt_oauth"),
+                          provider=provider_name(),
                           overlay_data_url=overlay_data_url(overlay),
                           applied_regions=applied,skipped=skipped,diagnostics=diagnostic)
 
@@ -163,6 +164,10 @@ async def reader_translate(file: UploadFile = File(...), context: str = Form("")
     from .reader_vision import translate_image, cache_profile
     from .siwc import AuthError
     fingerprint = cache_profile()
+    from .reader_vision import translation_model
+    from .siwc import auth
+    selection_version = auth.model_selection_version()
+    model = translation_model()
     if profile and profile != fingerprint:
         raise HTTPException(status_code=409, detail="Reader settings changed; scan again")
     try:
@@ -170,10 +175,11 @@ async def reader_translate(file: UploadFile = File(...), context: str = Form("")
     except AuthError as exc:
         # AuthError messages are safe by contract; omit image, dialogue and credentials.
         logger.warning("Reader vision rejected image (%dx%d): %s", image.width, image.height, exc)
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    if cache_profile() != fingerprint:
+        return JSONResponse({"detail": exc.public()}, status_code=exc.status,
+                            headers={"Cache-Control": "no-store"})
+    if cache_profile() != fingerprint or auth.model_selection_version() != selection_version:
         raise HTTPException(status_code=409, detail="Reader settings changed during translation; scan again")
     return {"image_width": image.width, "image_height": image.height,
             "regions": dialogue,
-            "provider": os.getenv("TRANSLATOR_PROVIDER", "chatgpt_oauth"),
+            "provider": provider_name(), "model": model,
             "reader_mode": "vision-first", "profile": fingerprint}

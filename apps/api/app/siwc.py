@@ -15,7 +15,9 @@ import hmac
 import json
 import secrets
 import time
+import threading
 from dataclasses import dataclass
+from contextlib import nullcontext
 from urllib.parse import urlencode
 
 import httpx
@@ -23,6 +25,7 @@ import jwt
 from jwt import PyJWK
 
 from .siwc_store import CredentialStore
+from .provider_errors import AuthError, provider_error, TERMINAL_REFRESH_ERRORS
 
 AUTHORIZATION_ENDPOINT = "https://auth.openai.com/api/accounts/authorize"
 TOKEN_ENDPOINT = "https://auth.openai.com/api/accounts/oauth/token"
@@ -35,10 +38,6 @@ PERMISSION = "chatgpt.tokens.use.direct"
 REDIRECT_URI = "http://127.0.0.1:8000/auth/callback"
 APP_NAME = "Manga Translator"
 PENDING_SECONDS = 600
-
-
-class AuthError(Exception):
-    """Safe to display: never include authorization codes or credentials."""
 
 
 class ModelSelectionChanged(AuthError):
@@ -55,6 +54,7 @@ class Attempt:
     expires_at: float
     expected_subject: str | None
     session_id: str | None = None
+    generation: int = 0
 
 
 def pkce_challenge(verifier: str) -> str:
@@ -67,8 +67,10 @@ class ChatGPTAuth:
         self.transport = transport
         self.pending: Attempt | None = None  # compatibility: latest attempt for tests only
         self.attempts: dict[str, Attempt] = {}
-        import threading
         self.attempt_lock = threading.RLock()
+        self.mutation_lock = threading.RLock()
+        self.generation = 0
+        self.selection_generation = 0
         self.lock = asyncio.Lock()
 
     def _http(self):
@@ -77,15 +79,18 @@ class ChatGPTAuth:
     def status(self):
         saved = self.store.load()
         if not saved:
-            return {"connected": False, "plan_usage_enabled": False, "email": None, "model": None}
+            return {"connected": False, "plan_usage_enabled": False, "email": None, "model": None,
+                    "reconnect_required": False, "registered": False}
         connected = bool(saved.get("refresh_token") or
                          (saved.get("access_token") and saved.get("expires_at", 0) > time.time()))
         return {"connected": connected,
                 "plan_usage_enabled": connected and PERMISSION in saved.get("scopes", []),
                 "email": saved.get("email"),
-                "model": saved.get("selected_model")}
+                "model": saved.get("selected_model"),
+                "reconnect_required": bool(saved.get("reconnect_required")),
+                "registered": bool(saved.get("client_id"))}
 
-    def start(self, reconnect=False, session_id=None):
+    def start(self, reconnect=False, session_id=None, consent=False):
         saved = self.store.load() if reconnect else None
         if reconnect and (not saved or not saved.get("client_id")):
             raise AuthError("No saved ChatGPT account to reconnect")
@@ -95,7 +100,7 @@ class ChatGPTAuth:
         client_id = saved["client_id"] if saved else "dynamic_agent_client"
         attempt = Attempt(state, nonce, verifier, client_id, REDIRECT_URI,
                           time.monotonic() + PENDING_SECONDS,
-                          saved.get("subject") if saved else None, session_id)
+                          saved.get("subject") if saved else None, session_id, self.generation)
         with self.attempt_lock:
             self.attempts = {k: v for k, v in self.attempts.items() if v.expires_at > time.monotonic()}
             if len(self.attempts) >= 32:
@@ -120,6 +125,8 @@ class ChatGPTAuth:
             if saved.get("email"):
                 params["login_hint"] = saved["email"]
             # Do not expose an id_token_hint in the browser URL for this POC.
+        if consent:
+            params["prompt"] = "consent"
         return AUTHORIZATION_ENDPOINT + "?" + urlencode(params)
 
     def _consume_attempt(self, state: str | None, session_id=None):
@@ -159,7 +166,7 @@ class ChatGPTAuth:
         return claims
 
     async def callback(self, code: str | None, state: str | None,
-                       client_id: str | None, error: str | None, session_id=None):
+                       client_id: str | None, error: str | None, session_id=None, authorize=None, commit_lock=None):
         # State must be checked even for denied consent; consume transaction once.
         attempt = self._consume_attempt(state, session_id)
         if error:
@@ -205,23 +212,47 @@ class ChatGPTAuth:
             "expires_at": time.time() + int(tokens.get("expires_in", 3600)),
             "selected_model": None,
         }
-        previous = self.store.load()
-        if previous and previous.get("subject") == claims["sub"] and previous.get("client_id") == issued:
-            record["selected_model"] = previous.get("selected_model")
-        self.store.save(record)
+        with self.mutation_lock, commit_lock or nullcontext():
+            if attempt.generation != self.generation:
+                raise AuthError(code="account_changed", status=409)
+            if authorize is not None:
+                authorize()
+            previous = self.store.load()
+            if previous and previous.get("subject") == claims["sub"] and previous.get("client_id") == issued:
+                record["selected_model"] = previous.get("selected_model")
+            self.generation += 1
+            self.store.save(record)
         return self.status()
+
+    def _current_credentials(self, original, generation):
+        current = self.store.load() or {}
+        fields = ("issuer", "subject", "client_id", "access_token", "refresh_token")
+        if generation != self.generation or any(current.get(key) != original.get(key) for key in fields):
+            raise AuthError(code="account_changed", status=409)
+        return current
+
+    def _invalidate_credentials(self, original, generation):
+        with self.mutation_lock:
+            current = self._current_credentials(original, generation)
+            for key in ("access_token", "refresh_token", "id_token", "expires_at"):
+                current.pop(key, None)
+            current.update(scopes=[], reconnect_required=True)
+            self.generation += 1
+            self.store.save(current)
 
     async def access_token(self):
         async with self.lock:
             record = self.store.load()
+            generation = self.generation
             if not record or not record.get("access_token"):
-                raise AuthError("Connect your ChatGPT account first")
+                raise AuthError("Connect your ChatGPT account first", code="reconnect_required", status=503)
             if PERMISSION not in record.get("scopes", []):
-                raise AuthError("ChatGPT plan usage permission was not granted")
+                raise AuthError("ChatGPT plan usage permission was not granted", code="permission_required", status=403)
             if record.get("expires_at", 0) > time.time() + 90:
                 return record["access_token"]
             if not record.get("refresh_token"):
-                raise AuthError("Session expired; reconnect ChatGPT")
+                self._invalidate_credentials(record, generation)
+                raise AuthError("Session expired; reconnect ChatGPT", code="reconnect_required", status=503)
             try:
                 async with self._http() as client:
                     response = await client.post(TOKEN_ENDPOINT, data={
@@ -230,23 +261,31 @@ class ChatGPTAuth:
                     })
                     response.raise_for_status()
                     tokens = response.json()
+            except httpx.HTTPStatusError as exc:
+                failure = provider_error(exc.response, refresh=True)
+                if failure.upstream_code in TERMINAL_REFRESH_ERRORS:
+                    self._invalidate_credentials(record, generation)
+                raise failure from exc
             except (httpx.HTTPError, ValueError) as exc:
-                raise AuthError("Unable to refresh ChatGPT session") from exc
+                raise AuthError("Unable to refresh ChatGPT session", code="provider_unavailable", status=503) from exc
             if not tokens.get("access_token") or not tokens.get("refresh_token"):
                 raise AuthError("Refresh response missing rotating credentials")
             scopes = tokens.get("scope", " ".join(record["scopes"])).split()
-            if PERMISSION not in scopes:
-                raise AuthError("ChatGPT plan permission has been revoked")
-            record.update({
+            updates = {
                 "access_token": tokens["access_token"],
                 "refresh_token": tokens["refresh_token"],
                 "scopes": scopes,
                 "expires_at": time.time() + int(tokens.get("expires_in", 3600)),
-            })
+            }
             if tokens.get("id_token"):
-                record["id_token"] = tokens["id_token"]
-            self.store.save(record)
-            return record["access_token"]
+                updates["id_token"] = tokens["id_token"]
+            with self.mutation_lock:
+                current = self._current_credentials(record, generation)
+                current.update(updates)
+                self.store.save(current)
+            if PERMISSION not in scopes:
+                raise AuthError("ChatGPT plan permission has been revoked", code="permission_required", status=403)
+            return current["access_token"]
 
     async def models(self):
         token = await self.access_token()
@@ -256,8 +295,10 @@ class ChatGPTAuth:
                                             headers={"Authorization": "Bearer " + token})
                 response.raise_for_status()
                 payload = response.json()
+        except httpx.HTTPStatusError as exc:
+            raise provider_error(exc.response) from exc
         except (httpx.HTTPError, ValueError) as exc:
-            raise AuthError("Could not list available ChatGPT models") from exc
+            raise AuthError("Could not list available ChatGPT models", code="provider_unavailable", status=503) from exc
         result = []
         for model in payload.get("models", []):
             if model.get("visibility") == "list" and model.get("slug"):
@@ -269,29 +310,35 @@ class ChatGPTAuth:
         record = (self.store.load() or {}) if record is None else record
         identity = [record.get(key) for key in ("issuer", "subject", "client_id", "email", "selected_model")]
         identity += [sorted(record.get("scopes", [])), bool(record.get("access_token") or record.get("refresh_token"))]
+        identity += [self.generation, self.selection_generation]
         return hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode()).hexdigest()
 
-    async def select_model(self, slug: str, *, expected_version=None, authorize=None):
+    async def select_model(self, slug: str, *, expected_version=None, authorize=None, commit_lock=None):
+        if expected_version is None:
+            expected_version = self.model_selection_version()
         catalog = await self.models()
         if slug not in {m["slug"] for m in catalog}:
             raise AuthError("Model is not available to this ChatGPT account")
-        record = self.store.load()
-        if not record or (expected_version is not None and not hmac.compare_digest(
-                expected_version, self.model_selection_version(record))):
-            raise ModelSelectionChanged("Account or model changed; reload the model list")
-        # The caller may recheck local authority after network I/O. No await
-        # between the final account/version/authority checks and the write.
-        if authorize is not None:
-            authorize()
-        record["selected_model"] = slug
-        self.store.save(record)
+        with self.mutation_lock, commit_lock or nullcontext():
+            record = self.store.load()
+            if not record or not hmac.compare_digest(expected_version, self.model_selection_version(record)):
+                raise ModelSelectionChanged("Account or model changed; reload the model list")
+            if authorize is not None:
+                authorize()
+            if record.get("selected_model") != slug:
+                self.selection_generation += 1
+            record["selected_model"] = slug
+            self.store.save(record)
 
     async def infer(self, prompt: str | list[dict], instructions: str | None = None):
+        version = self.model_selection_version()
         token = await self.access_token()
+        if version != self.model_selection_version():
+            raise AuthError(code="account_changed", status=409)
         record = self.store.load()
         model = record.get("selected_model")
         if not model:
-            raise AuthError("Select a ChatGPT model in Extension Settings")
+            raise AuthError("Select a ChatGPT model in Extension Settings", code="unsupported_capability", status=422)
         payload = {
             "model": model,
             "input": [{"role": "user", "content": prompt}],
@@ -306,7 +353,9 @@ class ChatGPTAuth:
                 async with client.stream("POST", RESOURCE + "/responses",
                                          headers={"Authorization": "Bearer " + token},
                                          json=payload) as response:
-                    response.raise_for_status()
+                    if response.is_error:
+                        await response.aread()
+                        raise provider_error(response)
                     async for line in response.aiter_lines():
                         if not line.startswith("data:"):
                             continue
@@ -320,9 +369,12 @@ class ChatGPTAuth:
                         elif event_type == "response.completed":
                             completed = True
                         elif event_type in {"response.failed", "response.incomplete", "error"}:
-                            raise AuthError("ChatGPT inference did not complete (possibly usage limit)")
+                            failure = event.get("response", event)
+                            if event_type == "error" and "error" not in event:
+                                failure = {"error": event}
+                            raise provider_error(payload=failure)
         except (httpx.HTTPError, ValueError) as exc:
-            raise AuthError("ChatGPT request failed or stream was interrupted") from exc
+            raise AuthError("ChatGPT request failed or stream was interrupted", code="provider_unavailable", status=503) from exc
         if not completed:
             raise AuthError("ChatGPT response stream ended before completion")
         return "".join(chunks)
@@ -346,32 +398,31 @@ class ChatGPTAuth:
             raise AuthError("ChatGPT returned an invalid translation format") from exc
 
     async def logout(self):
-        async with self.lock:
+        # Fence outstanding refresh/callback work before waiting for remote I/O.
+        with self.mutation_lock:
             record = self.store.load()
-            if not record:
-                return {"remote_revocation_confirmed": True}
-            confirmed = not bool(record.get("refresh_token"))
-            if record.get("refresh_token"):
-                try:
-                    async with self._http() as client:
-                        discovery = await client.get(DISCOVERY_URI)
-                        discovery.raise_for_status()
-                        uri = discovery.json().get("revocation_endpoint")
-                        # Guard against unexpected redirect destinations from discovery.
-                        from urllib.parse import urlparse
-                        target = urlparse(uri or "")
-                        if target.scheme != "https" or target.netloc != "auth.openai.com":
-                            raise AuthError("Invalid OpenAI revocation endpoint")
-                        response = await client.post(uri, data={
-                            "token": record["refresh_token"],
-                            "token_type_hint": "refresh_token",
-                            "client_id": record["client_id"]
-                        })
-                        confirmed = response.status_code == 200
-                except (httpx.HTTPError, AuthError, ValueError, TypeError):
-                    confirmed = False
+            self.generation += 1
             self.store.clear_tokens()
-            return {"remote_revocation_confirmed": confirmed}
+        if not record:
+            return {"remote_revocation_confirmed": True}
+        confirmed = not bool(record.get("refresh_token"))
+        if record.get("refresh_token"):
+            try:
+                async with self._http() as client:
+                    discovery = await client.get(DISCOVERY_URI)
+                    discovery.raise_for_status()
+                    uri = discovery.json().get("revocation_endpoint")
+                    from urllib.parse import urlparse
+                    target = urlparse(uri or "")
+                    if target.scheme != "https" or target.netloc != "auth.openai.com":
+                        raise AuthError("Invalid OpenAI revocation endpoint")
+                    response = await client.post(uri, data={
+                        "token": record["refresh_token"], "token_type_hint": "refresh_token",
+                        "client_id": record["client_id"]})
+                    confirmed = response.status_code == 200
+            except (httpx.HTTPError, AuthError, ValueError, TypeError):
+                confirmed = False
+        return {"remote_revocation_confirmed": confirmed}
 
 
 auth = ChatGPTAuth()

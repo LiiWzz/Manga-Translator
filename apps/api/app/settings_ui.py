@@ -1,5 +1,6 @@
 """Server-rendered, script-free local connection settings. Never render tokens."""
 from html import escape
+from .provider_errors import MESSAGES
 
 
 STYLE = """+:root{color-scheme:light dark;--bg:#f5f4f0;--surface:#fff;--ink:#262631;--muted:#696875;--line:#e5e3dd;--accent:#6551c6;--soft:#eeebfb;--error:#ae3f43}
@@ -22,7 +23,7 @@ def form(action, csrf, label, fields="", primary=False):
             f'{fields}<button type="submit" class="{"primary" if primary else ""}">{label}</button></form>')
 
 
-def settings_page(record, status, models=(), catalog_error=False, message=None):
+def settings_page(record, status, models=(), catalog_error=False, message=None, version=None):
     csrf = escape(record["csrf"], quote=True)
     intro = '<h1>ตั้งค่าการเชื่อมต่อ</h1><p class="muted">เชื่อมต่อครั้งเดียว แล้วกลับไปอ่านได้เลย</p>'
     if message:
@@ -40,7 +41,9 @@ def settings_page(record, status, models=(), catalog_error=False, message=None):
     connected = bool(status.get("connected"))
     permission = bool(status.get("plan_usage_enabled"))
     model = status.get("model")
-    badge = 'ตรวจการเชื่อมต่อแล้ว' if connected and permission and model else 'ตั้งค่าอีกนิดเดียว'
+    badge = 'ตั้งค่าครบแล้ว · ยังไม่ได้ทดสอบแปลจริง' if connected and permission and model else 'ตั้งค่าอีกนิดเดียว'
+    if status.get('reconnect_required'):
+        badge = 'การเชื่อมต่อหมดอายุ · ต้องเชื่อมต่อใหม่'
     body = intro + f'<section class="card"><span class="badge">{badge}</span>'
     for label, value in [('บัญชี ChatGPT', status.get('email') or ('เชื่อมต่อแล้ว' if connected else 'ยังไม่ได้เชื่อมต่อ')),
                          ('สิทธิ์ใช้แผน ChatGPT', 'อนุญาตแล้ว' if permission else 'ยังไม่ได้อนุญาต'),
@@ -49,11 +52,17 @@ def settings_page(record, status, models=(), catalog_error=False, message=None):
     body += '</section>'
     if not connected or not permission:
         body += '<section class="card"><h2>1. เชื่อมต่อ ChatGPT</h2><p>เข้าสู่ระบบและตรวจสอบการอนุญาตให้แอปใช้แผน ChatGPT ของคุณ</p>'
-        body += form('/auth/start', csrf, 'เชื่อมต่อ ChatGPT', primary=True) + '</section>'
+        reconnect = status.get("registered")
+        label = 'เชื่อมต่อบัญชีเดิมอีกครั้ง' if reconnect and not connected else 'อนุญาตใช้แผน ChatGPT' if reconnect else 'เชื่อมต่อ ChatGPT'
+        body += form('/auth/reconnect' if reconnect else '/auth/start', csrf, label, primary=True) + '</section>'
     else:
         body += '<section class="card"><h2>เลือกโมเดลสำหรับแปลภาพ</h2>'
         if catalog_error:
             body += '<p class="error" role="alert">โหลดรายการโมเดลไม่สำเร็จ โมเดลเดิมยังไม่ถูกเปลี่ยน</p><a class="button" href="/settings">โหลดรายการอีกครั้ง</a>'
+            if isinstance(catalog_error, str) and catalog_error in MESSAGES:
+                body += '<p>' + escape(MESSAGES[catalog_error][0]) + '</p>'
+                if catalog_error == 'usage_limit':
+                    body += '<a class="button" href="https://chatgpt.com/settings/usage" target="_blank" rel="noreferrer">ตรวจการใช้งานบัญชี</a>'
         elif models:
             options = '<option value="" disabled' + (' selected' if not model else '') + '>เลือกโมเดล</option>'
             slugs = {item['slug'] for item in models}
@@ -63,7 +72,7 @@ def settings_page(record, status, models=(), catalog_error=False, message=None):
                 slug = escape(str(item['slug']), quote=True)
                 name = escape(str(item.get('display_name') or item['slug']))
                 options += f'<option value="{slug}"' + (' selected' if item['slug'] == model else '') + f'>{name}</option>'
-            body += form('/auth/model', csrf, 'บันทึกโมเดล', '<label for="model">โมเดลที่บัญชีนี้ใช้ได้</label><select id="model" name="slug" required>' + options + '</select>', True)
+            body += form('/auth/model', csrf, 'บันทึกโมเดล', '<input type="hidden" name="version" value="' + escape(version or '', quote=True) + '"><label for="model">โมเดลที่บัญชีนี้ใช้ได้</label><select id="model" name="slug" required>' + options + '</select>', True)
         else:
             body += '<p>บัญชีนี้ยังไม่มีรายการโมเดลให้เลือก ลองโหลดใหม่หรือเชื่อมต่อบัญชีอีกครั้ง</p><a class="button" href="/settings">โหลดรายการใหม่</a>'
         body += '<small>เลือกโมเดลที่รองรับภาพ รายการนี้ยังไม่ยืนยันความสามารถด้านภาพหรือโควตาคงเหลือ</small></section>'

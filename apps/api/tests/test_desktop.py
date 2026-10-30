@@ -1,8 +1,11 @@
 """Desktop lifecycle and distribution boundaries, without real provider requests."""
 import asyncio
+import json
 import os
 import socket
 import sys
+import subprocess
+import runpy
 import time
 from pathlib import Path
 
@@ -97,6 +100,20 @@ def test_provider_validation_and_pairing_require_running_server():
         LocalGateway("arbitrary")
     with pytest.raises(RuntimeError):
         LocalGateway("mock").issue_pairing()
+
+
+def test_frozen_failure_report_is_read_even_when_executable_returns_error(monkeypatch):
+    script = Path(__file__).resolve().parents[3] / "scripts" / "smoke_desktop.py"
+    smoke = runpy.run_path(str(script))["main"]
+    monkeypatch.setattr(sys, "argv", [str(script), "generated-executable"])
+
+    def failed_app(command, **kwargs):
+        Path(command[-1]).write_text(json.dumps({"status": "failed", "check": "bundled-data", "error_type": "ImportError"}), encoding="utf-8")
+        return subprocess.CompletedProcess(command, 1)
+
+    monkeypatch.setattr(subprocess, "run", failed_app)
+    with pytest.raises(SystemExit, match="bundled-data.*ImportError"):
+        smoke()
 
 
 def test_real_loopback_lifecycle_keeps_pairing_across_restart(tmp_path, monkeypatch):

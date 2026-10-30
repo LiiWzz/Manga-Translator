@@ -13,11 +13,15 @@ def main():
     with tempfile.TemporaryDirectory(prefix="manga-bundle-report-") as directory:
         result = Path(directory) / "result.json"
         completed = subprocess.run([str(args.executable.resolve()), "--self-test-result", str(result)], timeout=90)
-        if completed.returncode or not result.is_file():
-            raise SystemExit("Frozen desktop acceptance failed before reporting")
+        if not result.is_file():
+            raise SystemExit(f"Frozen desktop acceptance failed before reporting (exit {completed.returncode})")
         report = json.loads(result.read_text(encoding="utf-8"))
         if report.get("status") != "ok":
-            raise SystemExit("Frozen desktop acceptance failed: " + str(report.get("check", "unknown")))
+            # Only app-owned categories/class names, never exception messages
+            # or a provider/account payload, are allowed in this report.
+            raise SystemExit("Frozen desktop acceptance failed: " + json.dumps(report))
+        if completed.returncode:
+            raise SystemExit(f"Frozen desktop acceptance exited unexpectedly ({completed.returncode})")
         print("Frozen desktop acceptance passed: " + ", ".join(report["checks"]))
 
 

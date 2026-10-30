@@ -89,11 +89,13 @@ def self_test(result_path: Path) -> int:
             window.close()
             application.processEvents()
         outcome = {"status": "ok", "checks": ["qt", "extension", "tls-data", "thai-data", "mock-reader", "pairing", "shutdown"]}
-    except BaseException:
+    except BaseException as exc:
         # A windowed executable can have no stdout/stderr. This result file is
         # also safe for CI artifacts and deliberately contains no exceptions.
         if gateway:
             gateway.request_stop()
             gateway.wait_stopped()
+            outcome["gateway_error"] = gateway.failure_kind
+        outcome["error_type"] = type(exc).__name__
     result_path.write_text(json.dumps(outcome), encoding="utf-8")
     return 0 if outcome["status"] == "ok" else 1

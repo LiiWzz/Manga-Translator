@@ -79,6 +79,7 @@ class LocalGateway:
         self.provider = provider
         self.port = port
         self.error: str | None = None
+        self.failure_kind: str | None = None
         self._server = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
@@ -137,10 +138,11 @@ class LocalGateway:
                 self._server.run(sockets=[listener])
                 if not self._stop.is_set():
                     self.error = "start_failed"
-        except BaseException:
+        except BaseException as exc:
             # Windowed bundles have no console; never expose provider/account
             # exceptions, file contents or credentials in an error dialog/log.
             self.error = "start_failed"
+            self.failure_kind = type(exc).__name__
         finally:
             listener.close()
 

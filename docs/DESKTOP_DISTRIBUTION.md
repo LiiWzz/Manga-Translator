@@ -83,7 +83,7 @@ and [GitHub hosted runner OS/architectures](https://docs.github.com/en/actions/r
 
 ## Distribution status
 
-These are private test bundles, not signed installers. Apple Developer ID signing
+These are test bundles, not signed installers. Apple Developer ID signing
 and notarization, Windows code signing, and Chrome Web Store publication are not
 configured. OS download protections may block unsigned apps; do not disable those
 protections to distribute a test. Signing requires publisher accounts/certificates

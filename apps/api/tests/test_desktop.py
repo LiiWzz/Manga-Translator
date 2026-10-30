@@ -63,7 +63,7 @@ def test_extension_export_has_no_profiles_tests_or_environment_files(tmp_path):
     (source / "icons").mkdir()
     (source / "icons" / "icon-16.png").write_bytes(b"icon")
     destination = export_extension(source, tmp_path / "export")
-    assert sorted(str(p.relative_to(destination)) for p in destination.rglob("*") if p.is_file()) == [
+    assert sorted(p.relative_to(destination).as_posix() for p in destination.rglob("*") if p.is_file()) == [
         "background.js", "icons/icon-16.png", "manifest.json",
     ]
 

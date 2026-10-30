@@ -4,6 +4,7 @@ The desktop companion starts the existing single-user API on **127.0.0.1:8000**
 and stops it when its window closes. Friends need Chrome plus the app, with no
 Python, Docker, terminal commands or shared server. Each person connects their own
 account. It does not install a background service or change Chrome permissions.
+Current macOS bundles require macOS 14 or newer, matching the bundled Qt wheels.
 
 ## First use
 
@@ -62,6 +63,20 @@ python -m venv .venv
 python -m pip install -e 'apps/api[desktop,bundle,test]'
 python scripts/build_desktop.py
 ```
+
+On Intel macOS, install the dependencies with static OpenSSL instead of the
+ordinary install command above (the CI workflow does this automatically):
+
+```sh
+OPENSSL_STATIC=1 python -m pip install --no-cache-dir --no-binary cryptography -e 'apps/api[desktop,bundle,test]'
+```
+
+This build requires Rust and OpenSSL development files on the maintainer's
+machine. Friends running the resulting app do not need those tools. If an
+existing environment already has a dynamically linked cryptography build,
+reinstall it with `OPENSSL_STATIC=1`, `--no-cache-dir`, `--force-reinstall` and
+`--no-binary cryptography` before packaging. See the
+[upstream macOS static-build instructions](https://github.com/pyca/cryptography/blob/main/docs/installation.rst#building-cryptography-on-macos).
 
 Smoke check:
 

@@ -17,6 +17,8 @@ class ReaderModelPicker {
     this.readerBusy = false;
     this.loading = false;
     this.saving = false;
+    this.statusPending = false;
+    this.catalogPending = false;
     this.canManage = false;
     this.accountReady = false;
     this.uncertain = false;
@@ -66,6 +68,10 @@ class ReaderModelPicker {
     if (value && !this.readerBusy) this.picker.open = false;
     this.readerBusy = value;
     this.render();
+    if (!value) {
+      if (this.statusPending) this.refreshStatus();
+      else if (this.catalogPending) this.loadCatalog();
+    }
   }
   render() {
     const selected = this.catalog.find(model => model.slug === this.selected);
@@ -102,7 +108,10 @@ class ReaderModelPicker {
       ? "รอแปลภาพในคิวให้เสร็จก่อนเปลี่ยนโมเดล" : this.loading ? "กำลังโหลดรายการโมเดล…" : this.message;
   }
   async refreshStatus() {
-    if (this.loading || this.saving || this.readerBusy) return;
+    if (this.loading || this.saving) return;
+    if (this.readerBusy) { this.statusPending = true; return; }
+    this.statusPending = false;
+    this.catalogPending = false;
     const epoch = ++this.epoch;
     this.loading = true;
     this.version = null;
@@ -145,7 +154,9 @@ class ReaderModelPicker {
     }
   }
   async loadCatalog() {
-    if (this.loading || this.saving || this.readerBusy) return;
+    if (this.loading || this.saving) return;
+    if (this.readerBusy) { this.catalogPending = true; return; }
+    this.catalogPending = false;
     const epoch = ++this.epoch;
     this.loading = true;
     this.version = null;

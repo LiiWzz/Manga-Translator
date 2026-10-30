@@ -198,3 +198,28 @@ The three previously failing control regressions now pass within the 103-test
 extension suite. The 121 mocked API tests, JS syntax, manifest and diff checks
 pass. Actual installed Chrome acceptance still requires reloading the unpacked
 extension and reopening Reader. The gateway and existing pairing do not change.
+
+## Model loading interrupted by a Reader queue
+
+Starting translation before the initial account-status response returned could
+leave the chooser with only a disabled placeholder. The status response tried
+to load the catalog during the active queue; that work was discarded, and queue
+completion only repainted the empty control. Pairing changes during translation
+could similarly clear the catalog without resuming the account check.
+
+The picker now remembers deferred status/catalog work and resumes it when Reader
+becomes idle. Status checks take priority and read the current credentials before
+loading choices. Revoked pairing stays disabled without querying the provider
+with old authority. Ordinary failed catalog requests still require explicit reload.
+
+The startup regression failed before the fix (`1 !== 2` options) and passes after
+it. Three new regressions cover interrupted startup plus replaced/revoked pairing
+during translation. All 118 extension regressions and 147 isolated mocked API
+tests pass; all extension JS syntax, manifest JSON and diff checks pass.
+
+BrowserOS neo reproduced the same sequence with real Reader scripts and generated
+Chrome/provider data: before the fix, zero catalog requests and a disabled
+placeholder; after it, one catalog request and eight enabled choices. Selecting
+the last choice saved it successfully while the inference count stayed at one.
+This verifies the generated-data UI flow; installed Chrome acceptance is pending.
+Reload the unpacked extension from this checkout and reopen Reader to try it.

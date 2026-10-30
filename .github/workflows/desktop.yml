@@ -31,7 +31,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: python -m pip install -e "apps/api[desktop,bundle,test]"
+      - if: matrix.label != 'macos-x64'
+        run: python -m pip install -e "apps/api[desktop,bundle,test]"
+      - if: matrix.label == 'macos-x64'
+        name: Build Intel cryptography with bundled OpenSSL
+        run: OPENSSL_STATIC=1 python -m pip install --no-cache-dir --no-binary cryptography -e "apps/api[desktop,bundle,test]"
       - run: python -m pytest apps/api/tests/test_desktop.py -q
         env:
           QT_QPA_PLATFORM: offscreen

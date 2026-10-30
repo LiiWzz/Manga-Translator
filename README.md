@@ -24,6 +24,13 @@ starting translation during a model save. Real Chrome acceptance is pending.
 
 ## Requirements
 
+For the Windows/macOS desktop companion (no Docker or Python needed on your
+friend's machine), see [sharing with friends](docs/DESKTOP_DISTRIBUTION.md).
+The native packaging workflow and local mock acceptance are separate from live
+account/browser acceptance; unsigned test bundles are not a public release.
+
+The source/Docker setup below remains available for development.
+
 - Docker Desktop / Docker Engine
 - Chrome desktop
 - Eligible ChatGPT plan and explicit ChatGPT plan-sharing consent

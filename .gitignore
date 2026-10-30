@@ -7,3 +7,4 @@ node_modules/
 dist/
 .wxt/
 .DS_Store
+*.egg-info/

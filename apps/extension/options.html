@@ -25,13 +25,13 @@
   </section>
   <section class="card" id="offline-help" hidden>
     <h2>เปิดระบบแปลในเครื่อง</h2>
-    <p>เปิด Docker แล้วรันคำสั่งนี้ในโฟลเดอร์โปรเจกต์ จากนั้นกด “ตรวจอีกครั้ง”</p>
-    <code>docker compose up -d api</code>
+    <p>เปิดแอป Manga Thai Reader แล้วรอให้ขึ้น “พร้อมใช้งาน” จากนั้นกด “ตรวจอีกครั้ง”</p>
+    <details><summary>สำหรับผู้ใช้ Docker</summary><p>เปิด Docker แล้วรันคำสั่งนี้ในโฟลเดอร์โปรเจกต์</p><code>docker compose up -d api</code></details>
   </section>
   <section class="card" id="pair-section" hidden aria-labelledby="pair-heading">
     <h2 id="pair-heading">จับคู่กับเครื่องนี้</h2>
-    <p>รันคำสั่งนี้ใน Terminal ของเครื่องคุณ แล้วนำรหัสมากรอกด้านล่าง ใช้ได้ครั้งเดียวภายใน 10 นาที</p>
-    <div class="command"><code id="pair-command">docker compose exec api python -m app.local_security pair</code><button id="copy-command" type="button" class="quiet">คัดลอกคำสั่ง</button></div>
+    <p>ในแอป Manga Thai Reader กด “สร้างรหัสจับคู่” แล้วนำรหัสมากรอกด้านล่าง ใช้ได้ครั้งเดียวภายใน 10 นาที</p>
+    <details><summary>สร้างรหัสด้วย Docker แทนแอป</summary><div class="command"><code id="pair-command">docker compose exec api python -m app.local_security pair</code><button id="copy-command" type="button" class="quiet">คัดลอกคำสั่ง</button></div></details>
     <p class="fine-print">การจับคู่สำเร็จจะแทนที่ส่วนขยายที่จับคู่ไว้เดิม โดยยังเก็บบัญชีและคำแปลไว้</p>
     <form id="pair-form">
       <label for="pair-code">รหัสจับคู่ชั่วคราว</label>
@@ -45,6 +45,7 @@
   <details class="card" id="advanced">
     <summary>ขั้นสูงและแก้ปัญหา</summary>
     <p>การออกจากบัญชี ChatGPT และเปลี่ยนโมเดลทำได้ใน “จัดการการเชื่อมต่อ”</p>
+    <details><summary>เลือกโหมด ChatGPT สำหรับผู้ใช้ Docker</summary><p>ตั้ง <code>TRANSLATOR_PROVIDER=chatgpt_oauth</code> ในไฟล์ <code>.env</code> แล้วรัน <code>docker compose up -d api</code> อีกครั้ง</p></details>
     <button id="re-pair" type="button">จับคู่ใหม่หรือเพิ่มสิทธิ์จัดการ Settings</button>
     <details class="danger-zone"><summary>ยกเลิกการจับคู่ส่วนขยายนี้</summary>
       <p>ส่วนขยายจะแปลและเปิด Settings ไม่ได้จนกว่าจะจับคู่ใหม่ บัญชี ChatGPT และคำแปลที่บันทึกไว้ยังอยู่</p>

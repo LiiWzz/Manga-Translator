@@ -1,0 +1,47 @@
+name: Desktop companion
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'apps/api/**'
+      - 'apps/desktop/**'
+      - 'apps/extension/**'
+      - 'scripts/*desktop.py'
+      - '.github/workflows/desktop.yml'
+permissions:
+  contents: read
+jobs:
+  bundle:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            label: windows-x64
+            executable: MangaThaiReader/MangaThaiReader.exe
+          - runner: macos-15
+            label: macos-arm64
+            executable: MangaThaiReader.app/Contents/MacOS/MangaThaiReader
+          - runner: macos-15-intel
+            label: macos-x64
+            executable: MangaThaiReader.app/Contents/MacOS/MangaThaiReader
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -e "apps/api[desktop,bundle,test]"
+      - run: python -m pytest apps/api/tests/test_desktop.py -q
+        env:
+          QT_QPA_PLATFORM: offscreen
+      - run: python scripts/build_desktop.py
+      - run: python scripts/smoke_desktop.py "dist/desktop/release/${{ matrix.executable }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MangaThaiReader-${{ matrix.label }}
+          path: |
+            dist/desktop/*.zip
+            dist/desktop/*.sha256
+          if-no-files-found: error
+          retention-days: 14

@@ -33,8 +33,8 @@ starting translation during a model save. Real Chrome acceptance is pending.
 
 ```sh
 git fetch origin
-git switch fix/reader-missing-model-catalog
-git pull origin fix/reader-missing-model-catalog
+git switch fix/settings-extension-get-origin
+git pull origin fix/settings-extension-get-origin
 ```
 
 Check `.env`, or create it with `cp .env.example .env`. Make sure it contains:

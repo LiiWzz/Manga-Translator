@@ -129,13 +129,13 @@ def test_pairing_code_expiry_and_rate_limit(setup, monkeypatch):
 
 
 @pytest.mark.parametrize("origin", [None, "null", HOST, "https://evil.invalid", "http://127.0.0.1:9000", "chrome-extension://" + "z" * 32])
-def test_management_requires_real_extension_origin_even_with_valid_credential(setup, origin):
+def test_management_handoffs_and_explicit_origins_require_real_extension_origin(setup, origin):
     sec, _, client = setup
     credentials = pair(sec, client)
     request_headers = {"authorization": "Bearer " + credentials["settings_token"]}
     if origin is not None:
         request_headers["origin"] = origin
-    assert client.get("/api/v1/settings/status", headers=request_headers).status_code == 403
+        assert client.get("/api/v1/settings/status", headers=request_headers).status_code == 403
     assert client.post("/api/v1/settings/ticket", headers=request_headers).status_code == 403
     value = ticket(client, credentials)
     assert client.post("/auth/extension-session", headers=request_headers, data={"ticket": value}, follow_redirects=False).status_code == 403
@@ -423,7 +423,40 @@ def test_extension_catalog_and_model_change_require_management_authority(setup, 
     assert sec.requests == [] and sec.inflight == 0
 
 
-@pytest.mark.parametrize("origin", [None, "null", HOST, "https://evil.invalid", "http://127.0.0.1:9000"])
+@pytest.mark.parametrize("fetch_site", [None, "none"])
+def test_extension_management_gets_accept_valid_capability_without_origin(setup, fetch_site):
+    sec, account, client = setup
+    connect(account, "vision-test")
+    credentials = pair(sec, client)
+    request_headers = {"authorization": "Bearer " + credentials["settings_token"]}
+    if fetch_site is not None:
+        request_headers["sec-fetch-site"] = fetch_site
+    assert client.get("/api/v1/settings/status", headers=request_headers).status_code == 200
+    response = client.get("/api/v1/settings/models", headers=request_headers)
+    assert response.status_code == 200
+    assert response.json()["models"] == [{"slug": "vision-test", "display_name": "Test model"}]
+    assert response.json()["model"] == "vision-test"
+    assert client.post("/api/v1/settings/ticket", headers=request_headers).status_code == 403
+    assert client.post("/api/v1/settings/model", headers=request_headers,
+                       json={"slug": "vision-test", "version": response.json()["version"]}).status_code == 403
+
+
+@pytest.mark.parametrize("path", ["/api/v1/settings/status", "/api/v1/settings/models"])
+def test_originless_management_gets_still_enforce_current_authority_and_request_context(setup, path):
+    sec, account, client = setup
+    connect(account, "vision-test")
+    credentials = pair(sec, client)
+    manager = {"authorization": "Bearer " + credentials["settings_token"]}
+    for token in [None, credentials["token"], "generated-invalid-token" * 3]:
+        request_headers = {"authorization": "Bearer " + token} if token else {}
+        assert client.get(path, headers=request_headers).status_code == 401
+    assert client.get(path, headers={**manager, "sec-fetch-site": "cross-site"}).status_code == 403
+    assert client.get(path, headers={**manager, "host": "attacker.invalid"}).status_code == 403
+    sec.revoke()
+    assert client.get(path, headers=manager).status_code == 401
+
+
+@pytest.mark.parametrize("origin", ["", "null", HOST, "https://evil.invalid", "http://127.0.0.1:9000", "chrome-extension://" + "z" * 32])
 def test_extension_model_routes_deny_foreign_origins(setup, origin):
     sec, account, client = setup
     connect(account)

@@ -78,7 +78,10 @@ invented from incomplete catalog metadata.
 ## Authority and concurrency
 
 `GET /api/v1/settings/models` and `POST /api/v1/settings/model` require the separate
-management capability issued by pair-once setup and a valid extension Origin.
+management capability issued by pair-once setup. Read-only extension GETs may
+omit Origin; if present, it must be a valid extension Origin. Model-save POSTs
+and browser-session handoffs still require a valid extension Origin. Host and
+cross-site Fetch Metadata checks also apply to requests without Origin.
 The local pairing credential never contains an OpenAI token. Chrome permissions,
 origin scope, inference admission and image limits remain unchanged.
 
@@ -223,3 +226,34 @@ placeholder; after it, one catalog request and eight enabled choices. Selecting
 the last choice saved it successfully while the inference count stayed at one.
 This verifies the generated-data UI flow; installed Chrome acceptance is pending.
 Reload the unpacked extension from this checkout and reopen Reader to try it.
+
+## Management GET rejected before capability validation
+
+The reported catalog error also reproduced with a valid management capability
+and no Origin header: both management-status and model-catalog GETs returned
+403 before validating the capability. Reader displayed the generic pairing
+recovery message, so reloading the picker could not fix that request shape.
+
+[Chromium's Origin-header report](https://issues.chromium.org/issues/40628751)
+also documents extension GETs omitting Origin when host access is granted.
+
+Read-only management GETs now permit a missing Origin while still requiring the
+current management capability and applying Host/Fetch Metadata checks. Explicit
+foreign, opaque, empty and malformed extension origins remain blocked. Reader-only,
+missing, invalid and revoked capabilities cannot read the catalog. Model writes,
+ticket creation and browser-session handoffs retain their strict Origin checks.
+
+Before the change, both generated-capability GET regressions failed with 403
+instead of 200. After it, all 152 isolated mocked API tests and 118 extension
+regressions pass, along with JS syntax, manifest JSON and diff checks. This is a
+gateway change: rebuild/restart the local API, then use Reader's Reload action.
+No Chrome permissions are added and pairing/account data is retained. Installed
+Chrome confirmation is still required; no claim is made that every pairing error
+is an Origin problem.
+
+The local gateway was rebuilt/restarted with this change. Its route source hash
+matches this checkout, health reports the configured ChatGPT provider, management
+pairing and the connected account remain present, and a read-only account check
+returns eight choices. Originless requests without a credential now reach the
+capability gate and return 401 instead of the earlier Origin rejection. The same
+152 API tests also pass in a disposable container using the newly built image.

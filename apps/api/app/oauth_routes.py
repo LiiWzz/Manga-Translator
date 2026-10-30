@@ -67,7 +67,13 @@ def _extension_browser_origin(request):
 
 
 def _management_generation(request):
-    origin = _extension_browser_origin(request)
+    # Extension GETs can omit Origin. The separate management capability remains
+    # mandatory; explicit origins and browser POST handoffs keep strict checks.
+    if request.method == "GET" and "origin" not in request.headers:
+        check_extension_origin(request)
+        origin = None
+    else:
+        origin = _extension_browser_origin(request)
     generation = security.settings_generation(request.headers.get("authorization"))
     if not generation:
         raise HTTPException(status_code=401, detail="Pair with Settings management permission")

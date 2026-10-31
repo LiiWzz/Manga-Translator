@@ -1,24 +1,23 @@
-# CORS troubleshooting — asurascans image CDN
+# Image access and CORS troubleshooting
 
-Symptom:
-`Access to fetch at https://cdn.asurascans.com/... from origin https://asurascans.com has been blocked by CORS policy`
+A browser can display a cross-origin `<img>` even when page JavaScript cannot read its bytes. Reader fetches image bytes in its extension service worker using explicit Chrome host access. It does not modify server headers or disable browser protections.
 
-Cause: calling `fetch(imageUrl)` in website context or content script does not bypass the image CDN's cross-origin policy. The browser may display an image as an `<img>` while JavaScript cannot read its bytes.
+1. Reload the extension in `chrome://extensions` after updating, reopen Reader and refresh the source page.
+2. Keep the local companion/gateway running and pair the extension in Options.
+3. Click **แปลภาพที่เห็น**. If prompted, use **อนุญาตเว็บไซต์ …** to approve the source page's origin.
+4. If an image comes from an unapproved origin, its card shows **อนุญาตรูปจาก …**. Review the displayed image domain and Chrome prompt. Approving retries that image; denying leaves it unsubmitted.
+5. Scroll until the image has loaded, then scan again. Discovery covers up to three eligible visible `<img>` elements in the main document.
 
-## Fix in this POC
+There is no longer a fixed CDN allowlist in Reader. The existing CDN permission stays in the manifest for compatibility; all additional origins use the already-declared optional permissions and require a specific user grant.
 
-The extension's **background service worker** fetches CDN image bytes using its explicit `https://cdn.asurascans.com/*` host permission, then sends the image to the local FastAPI OCR backend. The content script sends only the URL and renders the response. We do not change the origin server's CORS headers and do not turn off browser security.
+## Other page layouts
 
-1. Check out `feat/engineering-poc-v0.1`.
-2. Load unpacked from `apps/extension` (containing `manifest.json`).
-3. Click **Reload** on the extension card after pulling the latest source, then refresh the manga webpage.
-4. Ensure `http://127.0.0.1:8000/health` responds.
-5. Open the Extension's **Service worker** inspector on `chrome://extensions` for fetch and API errors.
+For canvas, CSS background images, `blob:`/`data:` images, shadow DOM or iframe readers, use **เลือกพื้นที่แปลจากหน้าจอ**. This captures the visible HTTP/HTTPS tab and displays a local preview. Select a region, review it, then explicitly submit that crop. If capture is unavailable, click the extension's toolbar icon on that tab to grant temporary `activeTab` access, and try again. Permanent page/CDN access does not replace the capture permission.
 
-**Important:** If Console refers to `inject.js`, you are running a different/older extension build. This repo's standalone version consists of `background.js` and `content.js`.
+See [site compatibility](SITE_COMPATIBILITY.md) for screenshot limits and remaining Chrome acceptance checks.
 
-## Restrictions
+## Server restrictions
 
-Cross-origin host permission is not a guarantee that an image is accessible. The CDN can reject unauthenticated requests (HTTP 401/403), deny hotlinking, or require other access conditions. In these situations respect the site's restrictions; do not circumvent them. Ask for site authorization or test on an allowed image source.
+Host permission does not guarantee access. Requests omit cookies and reject redirects. HTTP 401/403, anti-hotlink rules, paywalls, anti-bot protections and other server restrictions remain errors; Reader does not retry them with credentials or proxies. Use only content you have permission to access and translate. Do not use capture to circumvent access or copyright restrictions.
 
-The on-click POC works on three visible images and is not a complete site adapter. Do not distribute translated copyrighted image collections without permission.
+Direct fetching supports PNG, JPEG and WebP, up to 8 MiB, with a 15-second request timeout. Unsupported MIME types and oversized responses are rejected; streaming downloads stop once the byte limit is exceeded. Image decoding and vision have additional dimension/crop limits. No mode promises support for every site or whole-chapter translation.

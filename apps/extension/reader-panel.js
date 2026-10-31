@@ -2,6 +2,7 @@
 const status = document.getElementById("status");
 const items = document.getElementById("items");
 const scanButton = document.getElementById("scan");
+const captureButton = document.getElementById("capture");
 const grantButton = document.getElementById("grant");
 const clearButton = document.getElementById("clear-cache");
 const emptyState = document.getElementById("empty-state");
@@ -20,6 +21,7 @@ let pendingPermission = null;
 let clearing = false;
 let appearanceTouched = false;
 let modelPicker = null;
+let capturePicker = null;
 const appearance = {theme: "light", fontSize: 19, showSource: false};
 
 function applyAppearance() {
@@ -58,12 +60,13 @@ function updateReaderUi() {
   sourceLabel.textContent = source ? new URL(source.url).hostname : "เลือกแท็บมังงะเพื่อเริ่มอ่าน";
 }
 function setScanDisabled(disabled) {
-  scanButton.disabled = disabled || Boolean(modelPicker?.saving);
-  scanButton.setAttribute("aria-busy", String(scanButton.disabled));
+  scanButton.disabled = disabled || Boolean(modelPicker?.saving) || Boolean(capturePicker?.open);
+  captureButton.disabled = scanButton.disabled;
+  scanButton.setAttribute("aria-busy", String(Boolean(activeRun)));
   grantButton.disabled = Boolean(modelPicker?.saving);
   clearButton.disabled = clearing || Boolean(modelPicker?.saving);
   items.setAttribute("aria-busy", String(Boolean(activeRun)));
-  modelPicker?.setReaderBusy(Boolean(activeRun) || clearing);
+  modelPicker?.setReaderBusy(Boolean(activeRun) || clearing || Boolean(capturePicker?.open));
 }
 
 function show(message) { status.textContent = message; }
@@ -93,6 +96,7 @@ function reset(message) {
   activeRun = null;
   source = null;
   imagesByUrl.clear();
+  capturePicker?.close();
   clearPendingPermission();
   items.replaceChildren();
   setScanDisabled(clearing);
@@ -180,7 +184,7 @@ function renderDialogue(record, r, index) {
 function renderImage(record) {
   record.card.dataset.state = record.state;
   const heading = element("header", "image-heading");
-  heading.append(element("h2", "image-title", "ภาพ " + (record.index + 1)));
+  heading.append(element("h2", "image-title", (record.kind === "capture" ? "พื้นที่ที่เลือก " : "ภาพ ") + (record.index + 1)));
   if (record.state === "success") heading.append(element("span", "image-count", record.regions.length + " บทสนทนา"));
   if (record.cacheHit && (record.state === "success" || record.state === "empty")) {
     const badge = element("span", "image-badge", "บันทึกไว้");
@@ -208,16 +212,34 @@ function renderImage(record) {
         if (epoch === generation) show("ไม่พบภาพต้นฉบับ กรุณาเปิดแท็บมังงะเดิมแล้วลองอีกครั้ง");
       }
     });
-    heading.append(locate);
+    if (record.kind !== "capture") heading.append(locate);
     record.regions.forEach((r, index) => renderDialogue(record, r, index));
   } else {
     const messages = {queued: "รอแปล", loading: "กำลังแปล", empty: "ไม่พบบทสนทนาที่อ่านได้", error: "แปลไม่สำเร็จ: " + record.error};
     record.card.append(element("div", "image-status", messages[record.state]));
     if (record.state === "error") {
       const retry = element("button", "retry-button", "ลองใหม่");
-      retry.disabled = Boolean(activeRun) || Boolean(modelPicker?.saving);
-      retry.addEventListener("click", () => scan(record));
+      retry.disabled = Boolean(activeRun) || clearing || Boolean(modelPicker?.saving) || Boolean(capturePicker?.open);
+      retry.addEventListener("click", () => record.kind === "capture" && !record.dataUrl ? captureScreen() : scan(record));
       record.card.append(retry);
+      if (record.permissionOrigin) {
+        const grant = element("button", "retry-button", "อนุญาตรูปจาก " + new URL(record.url).hostname);
+        grant.disabled = retry.disabled;
+        grant.addEventListener("click", () => {
+          const epoch = generation;
+          grant.disabled = true;
+          // Keep the origin-specific Chrome prompt in the user gesture.
+          return chrome.permissions.request({origins: [record.permissionOrigin]}).then(async allowed => {
+            if (epoch !== generation || imagesByUrl.get(record.url) !== record) return;
+            const tab = await activeMangaTab();
+            if (epoch !== generation || !sameSource(source, tab)) return;
+            if (!allowed) { show("ยังไม่ได้อนุญาตโดเมนรูปภาพนี้"); return; }
+            await scan(record);
+          }).catch(() => { if (epoch === generation) show("ขอสิทธิ์โดเมนรูปภาพไม่สำเร็จ กรุณาลองใหม่"); })
+            .finally(() => { grant.disabled = Boolean(activeRun) || Boolean(modelPicker?.saving) || Boolean(capturePicker?.open); });
+        });
+        record.card.append(grant);
+      }
       if (record.action === "settings") {
         const settings = element("button", "retry-button", "เปิด Settings");
         settings.addEventListener("click", () => chrome.runtime.openOptionsPage());
@@ -260,7 +282,8 @@ async function translateRecord(run, record) {
   try {
     reply = await chrome.runtime.sendMessage({
       type: "MANGA_READER_TRANSLATE", url: record.url, tabId: source.id,
-      pageUrl: source.url, context: previousContext(record), profile: run.profile || ""
+      pageUrl: source.url, context: previousContext(record), profile: run.profile || "",
+      ...(record.dataUrl ? {dataUrl: record.dataUrl} : {})
     });
   } catch (error) {
     reply = {ok: false, error: error.message || String(error)};
@@ -273,6 +296,12 @@ async function translateRecord(run, record) {
     record.error = reply?.error || "ข้อมูลคำแปลไม่ถูกต้อง กรุณาลองใหม่";
     run.settingsChanged = Boolean(reply?.settingsChanged);
     record.action = reply?.action;
+    record.permissionOrigin = null;
+    if (record.kind !== "capture" && typeof reply?.permissionOrigin === "string") {
+      try {
+        if (reply.permissionOrigin === new URL(record.url).origin + "/*") record.permissionOrigin = reply.permissionOrigin;
+      } catch { /* Invalid source URLs cannot request new origins. */ }
+    }
     if (reply?.stopQueue) run.stopReason = record.error;
   } else {
     if (/^[a-f0-9]{64}$/.test(reply.data.profile)) run.profile = reply.data.profile;
@@ -283,12 +312,14 @@ async function translateRecord(run, record) {
     record.cacheEpoch = reply.data.cache_epoch;
     record.cacheHit = reply.data.cache_hit;
     record.notice = reply.data.cache_warning || "";
+    delete record.dataUrl; // Successful crops no longer need image bytes for retry.
   }
   renderImage(record);
 }
 
-async function scan(retryRecord = null) {
-  if (activeRun || clearing || modelPicker?.saving) return;
+async function scan(retryRecord = null, capture = null) {
+  if (activeRun || clearing || modelPicker?.saving || capturePicker?.open) return;
+  if (capture && (capture.generation !== generation || !sameSource(source, capture.tab))) return;
   if (items.querySelector("textarea")) { show("บันทึกหรือยกเลิกคำแก้ไขก่อนแปลภาพถัดไป"); return; }
   // Capture the generation before the first await, including tab/permission setup.
   const run = {generation};
@@ -298,6 +329,7 @@ async function scan(retryRecord = null) {
   try {
     const tab = await activeMangaTab();
     if (!current(run)) return;
+    if (capture && !sameSource(tab, capture.tab)) { reset("หน้าเปลี่ยนแล้ว กรุณาเลือกพื้นที่ใหม่"); return; }
     if (!sameSource(source, tab)) {
       reset("เริ่มบริบทสำหรับหน้านี้");
       source = tab;
@@ -310,7 +342,7 @@ async function scan(retryRecord = null) {
     }
     const origin = new URL(tab.url).origin;
     const pattern = origin + "/*";
-    const allowed = await chrome.permissions.contains({origins: [pattern]});
+    const allowed = capture || retryRecord?.kind === "capture" || await chrome.permissions.contains({origins: [pattern]});
     if (!await verifySource(run) || !current(run)) return;
     if (!allowed) {
       pendingPermission = {tabId: tab.id, pageUrl: tab.url, pattern, generation};
@@ -321,7 +353,18 @@ async function scan(retryRecord = null) {
     }
     clearPendingPermission();
     let queue;
-    if (retryRecord) {
+    if (capture) {
+      // Retain at most three failed crops for explicit retries, in memory only.
+      const retained = [...imagesByUrl.values()].filter(r => r.dataUrl);
+      while (retained.length >= 3) delete retained.shift().dataUrl;
+      const record = {url: "capture:" + crypto.randomUUID(), kind: "capture", dataUrl: capture.dataUrl,
+        index: Math.max(-1, ...[...imagesByUrl.values()].map(r => r.index)) + 1,
+        state: "queued", regions: [], error: "", card: element("section", "image")};
+      imagesByUrl.set(record.url, record);
+      items.append(record.card);
+      renderImage(record);
+      queue = [record];
+    } else if (retryRecord) {
       if (imagesByUrl.get(retryRecord.url) !== retryRecord || retryRecord.state !== "error") return;
       queue = [retryRecord];
     } else {
@@ -330,7 +373,7 @@ async function scan(retryRecord = null) {
       const images = await chrome.tabs.sendMessage(tab.id, {type: "MANGA_READER_DISCOVER", pageUrl: tab.url});
       if (!await verifySource(run) || !current(run)) return;
       if (!Array.isArray(images) || !images.length) {
-        throw new Error("ไม่พบรูปมังงะที่โหลดแล้วในหน้าจอ ลองเลื่อนหน้าให้รูปปรากฏและกดแปลอีกครั้ง");
+        throw new Error("ไม่พบรูปที่อ่านได้ ลองเลื่อนให้รูปโหลด หรือกดเลือกพื้นที่แปลจากหน้าจอ");
       }
       queue = [];
       for (const image of images.slice(0, 3)) {
@@ -382,6 +425,37 @@ async function scan(retryRecord = null) {
 }
 
 scanButton.addEventListener("click", () => scan());
+async function captureScreen() {
+  if (activeRun || clearing || modelPicker?.saving || capturePicker.open) return;
+  if (items.querySelector("textarea")) { show("บันทึกหรือยกเลิกคำแก้ไขก่อนเลือกพื้นที่แปล"); return; }
+  const run = {generation};
+  activeRun = run;
+  setScanDisabled(true);
+  updateRetryButtons();
+  try {
+    const tab = await activeMangaTab();
+    if (!current(run)) return;
+    if (!sameSource(source, tab)) {
+      reset("เตรียมเลือกพื้นที่แปล");
+      source = tab;
+      updateReaderUi();
+      run.generation = generation;
+      activeRun = run;
+      setScanDisabled(true);
+    }
+    clearPendingPermission();
+    show("กำลังจับภาพหน้าจอเพื่อให้เลือกพื้นที่ ยังไม่ได้ส่งแปล");
+    const reply = await chrome.runtime.sendMessage({type: "MANGA_READER_CAPTURE", tabId: tab.id, pageUrl: tab.url});
+    if (!await verifySource(run) || !current(run)) return;
+    if (!reply?.ok || !reply.data?.data_url) throw new Error(reply?.error || "จับภาพหน้าจอไม่ได้");
+    await capturePicker.show(reply.data.data_url, {generation, tab});
+    if (current(run)) show("เลือกพื้นที่ในภาพด้านบน แล้วกดส่งพื้นที่ที่เลือกแปล");
+  } catch (error) { if (current(run)) show(error.message || String(error)); }
+  finally {
+    if (current(run)) { activeRun = null; setScanDisabled(false); updateRetryButtons(); }
+  }
+}
+captureButton.addEventListener("click", captureScreen);
 // permissions.request must run directly in the click handler for Chrome's user gesture.
 grantButton.addEventListener("click", () => {
   const request = pendingPermission;
@@ -454,3 +528,9 @@ modelPicker = new ReaderModelPicker({onOpen: () => { menu.open = false; }, onBus
   setScanDisabled(Boolean(activeRun) || clearing);
   updateRetryButtons();
 }});
+capturePicker = new ReaderCapture({onConfirm: (dataUrl, context) => scan(null, {...context, dataUrl}),
+  onChange: () => {
+    emptyState.hidden = Boolean(capturePicker?.open) || imagesByUrl.size > 0;
+    setScanDisabled(Boolean(activeRun) || clearing);
+    updateRetryButtons();
+  }, onError: show});

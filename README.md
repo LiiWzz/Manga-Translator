@@ -19,6 +19,7 @@ A Chrome extension with a local companion that translates manga into a Thai read
 | --- | --- |
 | Read beside the page | Thai-first Chrome Side Panel, optional English, adjustable text size and light/dark appearance. Original image pixels stay untouched. |
 | Translate on demand | Process up to three eligible, visible images per click. Tall strips use bounded overlapping crops to retain detail. |
+| Read across site layouts | Approve image/CDN access one origin at a time, or capture the visible page and confirm a selected area for canvas, background images and embedded readers. |
 | Keep translations and corrections | Save dialogue and your edits in the Chrome profile. Matching results are reused after image, settings and context checks. |
 | Choose the next model | Load your account's model choices directly in Reader. Changing selection preserves displayed dialogue and edits; each result keeps its original model label. |
 | Recover from failures | Persistent per-image errors and explicit retries, with guidance for pairing, reconnecting, model support and usage limits. |
@@ -106,6 +107,10 @@ Open Settings through the extension again if its browser session expires. Direct
 3. Use **แก้คำแปล → บันทึก** to save a correction. Reopening the panel and scanning the same inputs can restore saved dialogue and edits without another inference request.
 4. Use **แปลครั้งถัดไป** to change the model for the next explicit scan/retry. Existing results retain their source model; changing selection alone never starts translation.
 
+For images hosted on another CDN, the failed image offers **อนุญาตรูปจาก …**. Review that domain in Chrome's permission prompt and grant it to retry that image. No all-sites access is requested.
+
+For canvas, `blob:` images, CSS backgrounds or embedded readers, click **เลือกพื้นที่แปลจากหน้าจอ**. If Chrome requires it, click the extension's toolbar icon on the source tab, then try again. Drag over the local screenshot preview and click **ส่งพื้นที่ที่เลือกแปล**. Only the confirmed crop is submitted; cancelling sends nothing to the translator. This uses visible screenshot pixels, so zoom in first if text is small. See [site compatibility and acceptance](docs/SITE_COMPATIBILITY.md).
+
 From the Reader menu, **เริ่มใหม่** clears the current panel/context while retaining saved results. **ลบคำแปลที่บันทึกไว้** deletes all saved Reader dialogue/corrections in this Chrome profile while preserving pairing and preferences. Failed images offer **ลองใหม่** for an explicit retry.
 
 Saved results expire after seven days and are bounded to **4 MiB / 200 entries**. Reuse checks current image content, model/account settings and context, so the gateway and image access are still required. Reset or navigation stops queued submissions and discards stale replies; already submitted inference may still consume usage. For same-URL chapter changes, use **เริ่มใหม่** manually. See [cache behavior](docs/READER_CACHE.md) and [model selection](docs/READER_MODELS.md).
@@ -116,7 +121,8 @@ Saved results expire after seven days and are bounded to **4 MiB / 200 entries**
 - **Provider data:** in ChatGPT mode, requested images and bounded preceding dialogue context are sent to the provider. Mock mode makes no provider calls. Vision requests can consume account usage, especially for tall strips.
 - **Account storage:** OAuth credentials stay in local files, outside browser code and Reader cache. Storage is plaintext, without OS keychain encryption; POSIX permissions restrict access to the owner. Desktop data is separate from Docker's volume. See [desktop data locations and updates](docs/DESKTOP_DISTRIBUTION.md#data-and-updates).
 - **Local authorization:** translation routes require pairing credentials; Settings uses separate management authority, session/CSRF checks and caller checks. Pairing does not protect against every process with access to your OS account. See the [security notes](docs/SECURITY_V031.md) for the threat model and outstanding work.
-- **Chrome access:** the manifest includes localhost and the existing configured CDN; other sites need explicit optional site access. Image fetching remains subject to host permissions, redirect, MIME and size restrictions. It does not bypass paywalls or anti-bot protections.
+- **Chrome access:** the manifest includes localhost and the existing configured CDN; other page/image origins need explicit optional access per origin. Capture uses the existing temporary `activeTab` permission and requires local crop confirmation. Image fetching remains subject to redirect, MIME and size restrictions. It does not bypass paywalls or anti-bot protections, and compatibility with every site is not guaranteed.
+- **Capture privacy:** the full screenshot is a local preview and is discarded on confirm, cancel, reset or source navigation. Confirmed crops use the same provider and dialogue cache as direct images. At most three failed crops remain in panel memory for explicit retries; successful crop bytes are released. Image bytes are not saved to persistent Reader storage.
 - **Translation quality:** vision can miss, duplicate or misorder dialogue. Image input is bounded to 8 MiB / 24 MP; tall strips allow at most eight crops and 8 MiB of combined data URLs. This is not whole-chapter translation or a linguistic-quality guarantee.
 - **Distribution:** desktop bundles support the Vision Reader. The historical OCR/overlay path needs Tesseract and Thai raster fonts that are not bundled. OS signing/notarization and Chrome Web Store publication are not configured.
 
@@ -165,6 +171,6 @@ The command block uses a POSIX shell. API tests include historical renderer test
 | Priorities and future scope | [Roadmap](docs/POC_PLAN.md) · [Idea backlog](docs/READER_IDEAS.md) |
 | Historical implementation | [OAuth v0.3](docs/OAUTH_V03.md) · [Overlay v0.2](docs/V02_ACCEPTANCE.md) |
 
-Next work prioritizes translation-quality evaluation and glossary support, then selected-region translation and controlled continuous reading. Optional overlay remains a possible v2 investigation, subject to artwork, geometry and cost evidence. Detailed guides retain historical branch/PR acceptance records; use this README for current `main` setup.
+Next work prioritizes translation-quality evaluation and glossary support, then original-image region selection and controlled continuous reading. The screenshot crop flow provides a manual path across more site layouts; it does not yet select regions at the original image's resolution. Optional overlay remains a possible v2 investigation, subject to artwork, geometry and cost evidence. Detailed guides retain historical branch/PR acceptance records; use this README for setup.
 
 Use feature branches and PRs, keep tests deterministic with the mock provider, and obtain human review for origin-permission expansion. Keep credentials, pairing codes and unlicensed manga assets out of commits, logs and fixtures. Respect creators' rights and website permissions.

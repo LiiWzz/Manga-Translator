@@ -36,6 +36,10 @@ class Element {
   focus() {}
   setAttribute(name, value) { this.attributes[name] = String(value); }
   getAttribute(name) { return this.attributes[name] ?? null; }
+  removeAttribute(name) { delete this.attributes[name]; if (name === "src") this.src = ""; }
+  getBoundingClientRect() { return {left: 0, top: 0, width: 320, height: 200}; }
+  setPointerCapture() {}
+  async decode() {}
   addEventListener(name, fn) { (this.listeners[name] ||= []).push(fn); }
   async click() {
     if (!this.disabled) await Promise.all((this.listeners.click || []).map(fn => fn()));
@@ -47,7 +51,10 @@ function descendants(el) { return el.children.flatMap(child => [child, ...descen
 function harness({savedAppearance, modelAccess = false} = {}) {
   const elements = Object.fromEntries(["status", "items", "scan", "grant", "reset", "settings", "clear-cache",
     "empty-state", "reading-count", "source-label", "reader-menu", "show-source", "theme", "font-smaller", "font-larger",
-    "model-picker", "model-summary", "model-current", "model-count", "model-select", "model-reload", "model-status", "model-settings"].map(id => [id, new Element()]));
+    "model-picker", "model-summary", "model-current", "model-count", "model-select", "model-reload", "model-status", "model-settings",
+    "capture", "capture-preview", "capture-surface", "capture-image", "capture-selection", "capture-size", "capture-confirm", "capture-cancel", "capture-all"].map(id => [id, new Element()]));
+  elements["capture-image"].naturalWidth = 1600;
+  elements["capture-image"].naturalHeight = 1000;
   const root = new Element("html");
   const state = {
     savedAppearance,
@@ -57,6 +64,8 @@ function harness({savedAppearance, modelAccess = false} = {}) {
     tab: {id: 1, windowId: 1, url: "https://reader.example/chapter/1"},
     images: [{index: 0, url: "https://reader.example/1.png"}],
     calls: [],
+    captures: [], cropCalls: [],
+    capture: async () => ({ok: true, data: {data_url: "data:image/png;base64,Z2VuZXJhdGVkLXNjcmVlbg=="}}),
     translate: async () => reply(),
     permission: async () => true,
     requestPermission: async () => true,
@@ -70,7 +79,7 @@ function harness({savedAppearance, modelAccess = false} = {}) {
       sendMessage: async (_id, message) => message.type === "MANGA_READER_DISCOVER"
         ? state.discover ? state.discover() : state.images : true
     },
-    permissions: {contains: () => state.permission(), request: () => state.requestPermission()},
+    permissions: {contains: options => state.permission(options), request: options => state.requestPermission(options)},
     scripting: {executeScript: () => state.inject()},
     storage: {onChanged: event(), local: {
       setAccessLevel: async () => {},
@@ -79,6 +88,7 @@ function harness({savedAppearance, modelAccess = false} = {}) {
     }},
     runtime: {
       sendMessage: message => {
+        if (message.type === "MANGA_READER_CAPTURE") { state.captures.push(message); return state.capture(message); }
         if (message.type !== "MANGA_READER_TRANSLATE") return state.mutate ? state.mutate(message) : Promise.resolve({ok: true});
         state.calls.push(message);
         return state.translate(message);
@@ -100,9 +110,17 @@ function harness({savedAppearance, modelAccess = false} = {}) {
     }
     throw new Error("Unexpected model request");
   };
-  vm.runInNewContext(fs.readFileSync("apps/extension/connection-errors.js", "utf8") + "\n" + fs.readFileSync("apps/extension/reader-models.js", "utf8") + "\n" + fs.readFileSync("apps/extension/reader-panel.js", "utf8"), {
-    chrome, URL, AbortSignal, fetch, window: {addEventListener(name, handler) { (state.windowEvents[name] ||= event()).addListener(handler); }},
-    document: {documentElement: root, getElementById: id => elements[id], createElement: tag => new Element(tag)}
+  vm.runInNewContext(["connection-errors.js", "reader-models.js", "reader-capture.js", "reader-panel.js"]
+    .map(file => fs.readFileSync("apps/extension/" + file, "utf8")).join("\n"), {
+    chrome, URL, crypto, AbortSignal, fetch, window: {addEventListener(name, handler) { (state.windowEvents[name] ||= event()).addListener(handler); }},
+    document: {documentElement: root, getElementById: id => elements[id], createElement: tag => {
+      const element = new Element(tag);
+      if (tag === "canvas") {
+        element.getContext = () => ({drawImage: (...args) => state.cropCalls.push(args.slice(1))});
+        element.toDataURL = () => "data:image/png;base64,Z2VuZXJhdGVkLWNyb3A=";
+      }
+      return element;
+    }}
   });
   return {
     state, chrome, elements, root,
@@ -367,17 +385,18 @@ test("content discovery and locate reject a stale chapter URL", () => {
 function workerHarness({storage = {}} = {}) {
   let listener;
   const state = {
-    tab: {id: 1, url: "https://reader.example/chapter/1", status: "complete"},
+    tab: {id: 1, windowId: 1, url: "https://reader.example/chapter/1", status: "complete"},
     active: true, fetched: [], beforeBlob: () => {},
     profile: "1".repeat(64), imageBytes: "generated-test-bytes", storage,
     message: {type: "MANGA_READER_TRANSLATE", tabId: 1, pageUrl: "https://reader.example/chapter/1", url: "https://reader.example/1.png", context: "prior dialogue"}
   };
   const context = vm.createContext({
-    URL, FormData, console, crypto, TextEncoder, Uint8Array,
+    URL, FormData, Blob, atob, AbortSignal, console, crypto, TextEncoder, Uint8Array,
     importScripts: file => vm.runInContext(fs.readFileSync("apps/extension/" + file, "utf8"), context),
     chrome: {
       sidePanel: {setPanelBehavior: async () => {}},
       runtime: {id: "test-extension", onMessage: {addListener(fn) { listener = fn; }}},
+      permissions: {contains: async options => state.permission ? state.permission(options) : true},
       storage: {local: {
         setAccessLevel: async options => { state.accessLevel = options.accessLevel; },
         get: async keys => {
@@ -389,7 +408,13 @@ function workerHarness({storage = {}} = {}) {
           Object.assign(state.storage, structuredClone(data));
         }
       }},
-      tabs: {get: async () => ({...state.tab}), query: async () => state.active ? [{...state.tab}] : []}
+      tabs: {get: async () => ({...state.tab}), query: async () => state.active ? [{...state.tab}] : [],
+        captureVisibleTab: async (windowId, options) => {
+          state.captureCalls = (state.captureCalls || 0) + 1;
+          assert.equal(windowId, state.tab.windowId); assert.equal(options.format, "png");
+          if (state.capture) return state.capture();
+          return "data:image/png;base64,Z2VuZXJhdGVkLXNjcmVlbg==";
+        }}
     },
     fetch: async (url, options) => {
       state.fetched.push(url);
@@ -973,4 +998,266 @@ test("an unchanged model render keeps native option elements attached", async ()
   await h.reset();
   assert.equal(h.elements["model-select"].children[0], first);
   assert.equal(h.elements["model-select"].disabled, false);
+});
+
+test("a new CDN prompts for exactly its origin and translates only after the user grants it", async () => {
+  const h = harness();
+  const image = "https://new-cdn.example/panel.png";
+  h.state.images = [{index: 0, url: image}];
+  h.state.translate = async () => ({ok: false, error: "Approve image origin", permissionOrigin: "https://new-cdn.example/*"});
+  await h.scan();
+  const grant = descendants(h.elements.items).find(el => el.textContent === "อนุญาตรูปจาก new-cdn.example");
+  assert(grant);
+  assert.equal(h.state.calls.length, 1);
+  let pattern;
+  h.state.requestPermission = async options => { pattern = options.origins[0]; return false; };
+  await grant.click();
+  assert.equal(pattern, "https://new-cdn.example/*");
+  assert.equal(h.state.calls.length, 1, "denial must not submit another request");
+  h.state.requestPermission = async () => true;
+  h.state.translate = async () => reply();
+  await grant.click();
+  assert.equal(h.state.calls.length, 2);
+  assert.match(h.text(), /สวัสดี/);
+});
+
+test("a stale CDN permission grant after navigation cannot translate the old image", async () => {
+  const h = harness(), permission = deferred();
+  h.state.translate = async () => ({ok: false, error: "Approve", permissionOrigin: "https://reader.example/*"});
+  await h.scan();
+  h.state.requestPermission = () => permission.promise;
+  const grant = descendants(h.elements.items).find(el => el.textContent === "อนุญาตรูปจาก reader.example").click();
+  await h.reset();
+  permission.resolve(true); await grant;
+  assert.equal(h.state.calls.length, 1);
+});
+
+test("a worker reply cannot ask the user to grant a domain unrelated to the image", async () => {
+  const h = harness();
+  h.state.translate = async () => ({ok: false, error: "Invalid", permissionOrigin: "https://unrelated.example/*"});
+  await h.scan();
+  assert(!descendants(h.elements.items).some(el => el.textContent.startsWith("อนุญาตรูปจาก")));
+});
+
+test("capture shows a local preview and submits only the confirmed crop without site permissions or DOM injection", async () => {
+  const h = harness();
+  h.state.permission = async () => { throw new Error("capture must not request permanent host access"); };
+  h.state.inject = async () => { throw new Error("canvas/iframe capture must not inject into the page"); };
+  await h.elements.capture.click();
+  assert.equal(h.elements["capture-preview"].hidden, false);
+  assert.equal(h.state.calls.length, 0);
+  assert.equal(h.state.captures.length, 1);
+  assert.equal(h.elements.scan.disabled, true);
+  assert.equal(h.elements.scan.getAttribute("aria-busy"), "false", "a local preview is not an active scan");
+  const surface = h.elements["capture-surface"];
+  await surface.emit("pointerdown", {button: 0, clientX: 32, clientY: 40, pointerId: 1, preventDefault() {}});
+  await surface.emit("pointermove", {clientX: 192, clientY: 140});
+  await surface.emit("pointerup");
+  await h.elements["capture-confirm"].click();
+  assert.equal(h.state.calls.length, 1);
+  assert.equal(h.state.calls[0].dataUrl, "data:image/png;base64,Z2VuZXJhdGVkLWNyb3A=");
+  assert.deepEqual(h.state.cropCalls[0], [160, 200, 800, 500, 0, 0, 800, 500]);
+  assert.equal(h.elements["capture-image"].src, "");
+  assert.equal(h.elements["capture-preview"].hidden, true);
+  assert.match(h.text(), /พื้นที่ที่เลือก/);
+  assert.match(h.text(), /สวัสดี/);
+  assert(!descendants(h.elements.items).some(el => el.tagName === "button" && el.textContent === "ไปยังภาพ"));
+  assert.equal(h.elements.scan.disabled, false);
+});
+
+for (const change of ["cancel", "reset", "activation", "navigation"]) test(change + " discards a capture preview without inference", async () => {
+  const h = harness();
+  await h.elements.capture.click();
+  if (change === "cancel") await h.elements["capture-cancel"].click();
+  if (change === "reset") await h.reset();
+  if (change === "activation") await h.chrome.tabs.onActivated.emit({tabId: 2, windowId: 1});
+  if (change === "navigation") await h.chrome.tabs.onUpdated.emit(1, {status: "loading"});
+  await h.elements["capture-confirm"].click();
+  assert.equal(h.state.calls.length, 0);
+  assert.equal(h.elements["capture-preview"].hidden, true);
+  assert.equal(h.elements["capture-image"].src, "");
+  assert.equal(h.elements.scan.disabled, false);
+});
+
+test("navigation during capture or image decoding cannot restore an obsolete preview", async () => {
+  for (const stage of ["capture", "decode"]) {
+    const h = harness(), pending = deferred();
+    if (stage === "capture") h.state.capture = () => pending.promise;
+    else h.elements["capture-image"].decode = () => pending.promise;
+    const capture = h.elements.capture.click(); await settle();
+    await h.reset();
+    pending.resolve({ok: true, data: {data_url: "data:image/png;base64,Z2VuZXJhdGVk"}});
+    await capture;
+    assert.equal(h.elements["capture-preview"].hidden, true);
+    assert.equal(h.state.calls.length, 0);
+    assert.equal(h.elements.scan.disabled, false);
+  }
+});
+
+test("a source changed without an event is checked again when a crop is confirmed", async () => {
+  const h = harness();
+  await h.elements.capture.click();
+  h.state.tab.url += "/next";
+  await h.elements["capture-confirm"].click();
+  assert.equal(h.state.calls.length, 0);
+  assert.equal(h.elements["capture-preview"].hidden, true);
+});
+
+test("capture permission errors are actionable and do not trigger host access prompts", async () => {
+  const h = harness();
+  h.state.capture = async () => ({ok: false, error: "คลิกไอคอนส่วนขยายบนแท็บนี้"});
+  await h.elements.capture.click();
+  assert.match(h.elements.status.textContent, /คลิกไอคอน/);
+  assert.equal(h.state.calls.length, 0);
+  assert.equal(h.elements.capture.disabled, false);
+});
+
+test("keyboard crop controls and full-image selection keep pixel geometry consistent", async () => {
+  const h = harness();
+  await h.elements.capture.click();
+  const surface = h.elements["capture-surface"];
+  await surface.emit("keydown", {key: "ArrowLeft", shiftKey: true, preventDefault() {}});
+  await surface.emit("keydown", {key: "ArrowRight", preventDefault() {}});
+  await h.elements["capture-confirm"].click();
+  assert.deepEqual(h.state.cropCalls[0], [16, 0, 1584, 1000, 0, 0, 1584, 1000]);
+  await h.elements.capture.click();
+  await h.elements["capture-all"].click();
+  await h.elements["capture-confirm"].click();
+  assert.deepEqual(h.state.cropCalls[1], [0, 0, 1600, 1000, 0, 0, 1600, 1000]);
+});
+
+test("failed crops retain bytes for explicit retry and successful crops still allow corrections", async () => {
+  const h = harness();
+  h.state.translate = async () => ({ok: false, error: "Temporary failure"});
+  await h.elements.capture.click(); await h.elements["capture-confirm"].click();
+  const crop = h.state.calls[0].dataUrl;
+  h.state.translate = async () => reply();
+  await h.retry();
+  assert.equal(h.state.calls[1].dataUrl, crop);
+  await descendants(h.elements.items).find(el => el.tagName === "button" && el.textContent === "แก้คำแปล").click();
+  h.elements.items.querySelector("textarea").value = "คำแก้พื้นที่";
+  await descendants(h.elements.items).find(el => el.tagName === "button" && el.textContent === "บันทึก").click();
+  assert.match(h.text(), /คำแก้พื้นที่/);
+});
+
+test("model selection and retries are locked while choosing a crop", async () => {
+  const h = harness({modelAccess: true}); await settle();
+  await h.elements.capture.click();
+  assert.equal(h.elements["model-select"].disabled, true);
+  await h.chooseModel("vision-b");
+  assert.equal(h.state.model, "vision-a");
+  await h.elements["capture-cancel"].click();
+  assert.equal(h.elements["model-select"].disabled, false);
+});
+
+test("worker captures only the active HTTP source for its trusted Reader and never contacts inference", async () => {
+  const h = workerHarness(), message = {...h.message, type: "MANGA_READER_CAPTURE"};
+  const preview = await h.send(message);
+  assert.equal(preview.ok, true);
+  assert.match(preview.data.data_url, /^data:image\/png;base64,/);
+  assert.equal(h.captureCalls, 1);
+  assert.deepEqual(h.fetched, []);
+  assert(!JSON.stringify(h.storage).includes("data:image"));
+  const badSender = await h.send(message, {id: "test-extension", url: h.tab.url, tab: h.tab});
+  assert.equal(badSender.ok, false);
+  h.active = false;
+  assert.equal((await h.send(message)).ok, false);
+  assert.equal(h.captureCalls, 1);
+});
+
+test("worker discards screenshots if the source changes during capture", async () => {
+  const h = workerHarness();
+  h.capture = async () => { h.tab.url += "/next"; return "data:image/png;base64,Z2VuZXJhdGVk"; };
+  const result = await h.send({...h.message, type: "MANGA_READER_CAPTURE"});
+  assert.equal(result.ok, false);
+  assert.deepEqual(h.fetched, []);
+});
+
+test("worker translates and caches confirmed crops without image fetching or persisting image bytes", async () => {
+  const h = workerHarness();
+  h.message.dataUrl = "data:image/png;base64,Z2VuZXJhdGVkLWNyb3A=";
+  const result = await h.send();
+  assert.equal(result.ok, true);
+  assert.equal(h.fetched.filter(url => url.endsWith("/translate")).length, 1);
+  assert(!h.fetched.some(url => url.startsWith("https:")));
+  const reused = await h.send();
+  assert.equal(reused.data.cache_hit, true);
+  assert.equal(h.fetched.filter(url => url.endsWith("/translate")).length, 1);
+  assert(!JSON.stringify(h.storage).includes("data:image"));
+});
+
+test("content scripts and oversized crop messages cannot submit captured image bytes", async () => {
+  const h = workerHarness();
+  h.message.dataUrl = "data:image/png;base64,Z2VuZXJhdGVk";
+  assert.equal((await h.send(h.message, {id: "test-extension", tab: h.tab, url: h.tab.url})).ok, false);
+  assert.equal((await h.send({...h.message, type: "MANGA_RENDER_TRANSLATE"}, {id: "test-extension", tab: h.tab})).ok, false);
+  h.message.dataUrl = "data:image/png;base64," + "A".repeat(11184900);
+  assert.equal((await h.send()).ok, false);
+  assert.deepEqual(h.fetched, []);
+});
+
+test("worker supports approved new CDNs and reports unapproved origins without inference", async () => {
+  const h = workerHarness();
+  h.message.url = "https://new-cdn.example/panel.png";
+  h.permission = async () => false;
+  const denied = await h.send();
+  assert.equal(denied.ok, false);
+  assert.equal(denied.permissionOrigin, "https://new-cdn.example/*");
+  assert.deepEqual(h.fetched, []);
+  h.permission = async () => true;
+  assert.equal((await h.send()).ok, true);
+  assert(h.fetched.includes(h.message.url));
+});
+
+test("oversized or undecodable previews release the screenshot and never submit inference", async () => {
+  for (const failure of ["dimensions", "decode"]) {
+    const h = harness();
+    if (failure === "dimensions") h.elements["capture-image"].naturalWidth = 25000;
+    else h.elements["capture-image"].decode = async () => { throw new Error("Invalid image"); };
+    await h.elements.capture.click();
+    assert.equal(h.elements["capture-preview"].hidden, true);
+    assert.equal(h.elements["capture-image"].src, "");
+    assert.equal(h.elements.capture.disabled, false);
+    assert.equal(h.state.calls.length, 0);
+    assert.match(h.elements.status.textContent, failure === "dimensions" ? /24 MP/ : /เปิดภาพหน้าจอไม่ได้/);
+  }
+});
+
+test("tiny crops cannot be confirmed and Escape cancels without sending image bytes", async () => {
+  const h = harness();
+  await h.elements.capture.click();
+  const surface = h.elements["capture-surface"];
+  await surface.emit("pointerdown", {button: 0, clientX: 100, clientY: 100, pointerId: 1, preventDefault() {}});
+  await surface.emit("pointermove", {clientX: 101, clientY: 101});
+  await surface.emit("pointerup");
+  assert.equal(h.elements["capture-confirm"].disabled, true);
+  await h.elements["capture-confirm"].click();
+  assert.equal(h.state.calls.length, 0);
+  await surface.emit("keydown", {key: "Escape"});
+  assert.equal(h.elements["capture-preview"].hidden, true);
+  assert.match(h.elements.status.textContent, /ยกเลิก/);
+});
+
+test("only the three latest failed crops retain bytes for retries", async () => {
+  const h = harness();
+  h.state.translate = async () => ({ok: false, error: "Temporary failure"});
+  for (let i = 0; i < 4; i++) { await h.elements.capture.click(); await h.elements["capture-confirm"].click(); }
+  assert.equal(h.state.calls.length, 4);
+  await h.retry();
+  assert.equal(h.state.calls.length, 4, "old crop retry must request a new preview, not send released bytes");
+  assert.equal(h.state.captures.length, 5);
+  assert.equal(h.elements["capture-preview"].hidden, false);
+});
+
+test("capture refuses restricted URLs, missing toolbar permission and oversized screenshots", async () => {
+  for (const failure of ["url", "permission", "size"]) {
+    const h = workerHarness();
+    if (failure === "url") { h.tab.url = "chrome://settings/"; h.message.pageUrl = h.tab.url; }
+    if (failure === "permission") h.capture = async () => { throw new Error("activeTab required"); };
+    if (failure === "size") h.capture = async () => "data:image/png;base64," + "A".repeat(32 * 1024 * 1024);
+    const result = await h.send({...h.message, type: "MANGA_READER_CAPTURE"});
+    assert.equal(result.ok, false);
+    assert.match(result.error, failure === "url" ? /http\/https/ : failure === "permission" ? /คลิกไอคอน/ : /ใหญ่เกินไป/);
+    assert.deepEqual(h.fetched, []);
+  }
 });

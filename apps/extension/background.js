@@ -1,6 +1,5 @@
 const API = "http://127.0.0.1:8000/api/v1/translate-rendered";
-const SUPPORTED_IMAGE_HOSTS = new Set(["cdn.asurascans.com"]);
-const MAX_BYTES = 8 * 1024 * 1024;
+importScripts("reader-image-source.js");
 importScripts("reader-cache.js");
 importScripts("connection-errors.js");
 const readerCache = new ReaderCache(chrome.storage.local);
@@ -51,48 +50,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       error: "บันทึกหรือลบข้อมูลไม่สำเร็จ พื้นที่อาจเต็มหรือคำแปลหมดอายุ กรุณาลองอีกครั้ง"}));
     return true;
   }
-  if (message.type !== "MANGA_RENDER_TRANSLATE" && message.type !== "MANGA_READER_TRANSLATE") return false;
+  if (!["MANGA_RENDER_TRANSLATE", "MANGA_READER_TRANSLATE", "MANGA_READER_CAPTURE"].includes(message.type)) return false;
   (async () => {
     await storageReady;
     const {mangaCapability, mangaDebug} = await chrome.storage.local.get(["mangaCapability", "mangaDebug"]);
     if (!mangaCapability) throw new Error("Pair extension in Options first");
-    const reader = message.type === "MANGA_READER_TRANSLATE";
+    const reader = message.type !== "MANGA_RENDER_TRANSLATE";
     if (reader && !readerPage(sender)) throw new Error("Invalid Reader page");
+    if (message.type === "MANGA_READER_CAPTURE") {
+      const tab = await readerSource(message, sender);
+      if (!/^https?:\/\//.test(tab.url)) throw new Error("จับภาพได้เฉพาะหน้าเว็บ http/https");
+      let dataUrl;
+      try { dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {format: "png"}); }
+      catch { throw new Error("กรุณาคลิกไอคอนส่วนขยายบนแท็บนี้เพื่ออนุญาตจับหน้าจอ แล้วกดเลือกพื้นที่แปลอีกครั้ง"); }
+      await readerSource(message, sender);
+      if (typeof dataUrl !== "string" || !dataUrl.startsWith("data:image/png;base64,") || dataUrl.length > 32 * 1024 * 1024) {
+        throw new Error("ภาพหน้าจอใหญ่เกินไป กรุณาลดขนาดหน้าต่างแล้วลองใหม่");
+      }
+      return {data_url: dataUrl};
+    }
     let epoch = null, cacheWarning = "";
     if (reader) {
       try { epoch = await readerCache.begin(); }
       catch { cacheWarning = "แปลได้ แต่เปิดข้อมูลที่บันทึกไว้ไม่ได้"; }
     }
-    if (typeof message.url !== "string") throw new Error("Invalid image URL");
     let tab = sender.tab;
     if (reader) tab = await readerSource(message, sender);
     if (!tab?.id || !tab?.url) throw new Error("Invalid translation source");
-    const page = new URL(tab.url);
-    const image = new URL(message.url);
-    if (image.protocol !== "https:" && image.origin !== page.origin) {
-      throw new Error("Insecure image URL");
-    }
-    if (image.origin !== page.origin && !SUPPORTED_IMAGE_HOSTS.has(image.hostname)) {
-      throw new Error("CDN access is not configured for " + image.hostname);
-    }
-    // Browser extension service worker fetches the image with explicit host permission.
-    // Never attempt to bypass the website's authentication or server-side access policy.
-    let imageResponse;
-    try {
-      imageResponse = await fetch(image.href, {credentials: "omit", redirect: "error", cache: "no-store"});
-    } catch {
-      throw new Error("Image request blocked. Check CDN permissions or access policy.");
-    }
-    if (!imageResponse.ok) throw new Error("Image HTTP " + imageResponse.status);
-    const mime = imageResponse.headers.get("content-type")?.split(";")[0] || "";
-    if (!["image/png", "image/jpeg", "image/webp"].includes(mime)) {
-      throw new Error("Unsupported image MIME: " + mime);
-    }
-    if (Number(imageResponse.headers.get("content-length") || 0) > MAX_BYTES) {
-      throw new Error("Image exceeds 8 MB limit");
-    }
-    const blob = await imageResponse.blob();
-    if (blob.size > MAX_BYTES) throw new Error("Image exceeds 8 MB limit");
+    if (!reader && message.dataUrl !== undefined) throw new Error("Invalid image source");
+    const blob = reader && message.dataUrl !== undefined ? ReaderImageSource.fromDataUrl(message.dataUrl)
+      : await ReaderImageSource.fetch(message.url, tab.url);
     let cacheKey, fingerprint;
     if (reader) {
       await readerSource(message, sender);
@@ -151,6 +138,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       cache_hit: false, cache_warning: saved ? "" : cacheWarning || "แปลแล้ว แต่ไม่ได้บันทึกถาวร"};
   })().then(data => sendResponse({ok: true, data}), error => sendResponse({ok: false, error: String(error),
     settingsChanged: Boolean(error.settingsChanged), stopQueue: Boolean(error.stopQueue),
-    errorCode: error.code, action: error.action}));
+    errorCode: error.code, action: error.action, permissionOrigin: error.permissionOrigin}));
   return true;
 });

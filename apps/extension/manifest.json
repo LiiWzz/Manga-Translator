@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Manga Translator POC",
+  "version": "0.1.1",
+  "description": "Translate English manga bubbles to Thai on demand.",
+  "permissions": ["activeTab", "scripting"],
+  "host_permissions": [
+    "http://127.0.0.1:8000/*",
+    "https://cdn.asurascans.com/*"
+  ],
+  "action": {"default_title": "Translate visible images"},
+  "background": {"service_worker": "background.js"}
+}

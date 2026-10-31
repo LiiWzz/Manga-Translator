@@ -15,6 +15,8 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+from pythainlp.tokenize import word_tokenize
+from .text_quality import clean_translation, supports_text
 
 FONT_CANDIDATES = (
     os.environ.get("THAI_FONT_PATH", ""),
@@ -54,6 +56,7 @@ def _tone(image: np.ndarray, bbox: tuple[int, int, int, int]):
 
 
 def _thai_clusters(text: str) -> list[str]:
+    """Keep base characters and Thai vowel/tone marks joined (legacy helper)."""
     clusters = []
     for char in text:
         if clusters and (unicodedata.combining(char) or unicodedata.category(char).startswith("M")):
@@ -64,36 +67,65 @@ def _thai_clusters(text: str) -> list[str]:
 
 
 def _wrap(text: str, font: ImageFont.FreeTypeFont, width: int) -> list[str]:
-    lines, current = [], ""
-    for part in re.findall(r"\S+\s*", text.strip()):
-        candidate = (current + part).strip()
-        if current and font.getlength(candidate) > width:
-            lines.append(current.rstrip())
-            current = ""
-        if font.getlength(part.strip()) <= width:
-            current += part
+    """Wrap Thai at dictionary word boundaries, never inside a combining cluster.
+
+    Extremely long unbreakable tokens are rejected so _fit can reduce the font
+    instead of silently splitting a Thai syllable or overflowing the bubble.
+    """
+    if width <= 0:
+        return []
+    lines: list[str] = []
+    for paragraph in text.strip().splitlines():
+        if not paragraph.strip():
             continue
-        for cluster in _thai_clusters(part):
-            trial = current + cluster
-            if current and font.getlength(trial.strip()) > width:
-                lines.append(current.strip())
-                current = cluster
+        current, separator = "", ""
+        for token in word_tokenize(paragraph, engine="newmm", keep_whitespace=True):
+            if not token:
+                continue
+            if token.isspace():
+                separator = " "
+                continue
+            token = unicodedata.normalize("NFC", token)
+            if font.getlength(token) > width:
+                return []
+            candidate = current + (separator if current else "") + token
+            if current and font.getlength(candidate) > width:
+                lines.append(current)
+                current = token
             else:
-                current = trial
-    if current.strip():
-        lines.append(current.strip())
+                current = candidate
+            separator = ""
+        if current:
+            lines.append(current)
     return lines
 
 
 def _fit(text: str, width: int, height: int, path: str):
+    """Return only layouts whose actual glyph bounds fit the available box."""
+    inset = 6
+    max_width = width - inset * 2
+    max_height = height - inset * 2
+    if max_width <= 0 or max_height <= 0:
+        return None
     for size in range(min(48, max(13, height)), 9, -1):
         font = ImageFont.truetype(path, size=size)
-        lines = _wrap(text, font, max(15, width - 8))
-        spacing = max(2, int(size * .18))
+        lines = _wrap(text, font, max_width)
+        if not lines:
+            continue
+        spacing = max(2, int(size * .16))
         ascent, descent = font.getmetrics()
-        lh = ascent + descent
-        if lines and len(lines) * lh + (len(lines)-1) * spacing <= height - 4:
-            return font, lines, spacing, lh
+        # Use full font metrics to reserve headroom for Thai vowels/tone marks.
+        lh = max(ascent + descent,
+                 *(font.getbbox(line, anchor="lt")[3] -
+                   font.getbbox(line, anchor="lt")[1] for line in lines))
+        total = len(lines) * lh + (len(lines)-1) * spacing
+        if total > max_height:
+            continue
+        if any((lambda box: box[2] - box[0] > max_width or
+               box[3] - box[1] > lh)(font.getbbox(line, anchor="lt"))
+               for line in lines):
+            continue
+        return font, lines, spacing, lh
     return None
 
 
@@ -115,8 +147,9 @@ def render_translations(image: Image.Image, regions: list[TextRegion], translati
     applied, skipped = 0, []
     for index, (region, text) in enumerate(zip(regions, translations)):
         x, y, w, h = region.bbox
-        if not text or not re.search(r"[\u0E00-\u0E7F]", text):
-            skipped.append({"index": index, "reason": "not_thai"})
+        text, issue = clean_translation(text)
+        if issue:
+            skipped.append({"index": index, "reason": issue})
             continue
         if w < 12 or h < 9 or x < 0 or y < 0 or x+w > image.width or y+h > image.height:
             skipped.append({"index": index, "reason": "invalid_bbox"})
@@ -128,8 +161,8 @@ def render_translations(image: Image.Image, regions: list[TextRegion], translati
         bg, fg = result
         x0, y0 = max(0, x-3), max(0, y-3)
         x1, y1 = min(image.width, x+w+3), min(image.height, y+h+3)
-        dest_h = max(h+12, int(h*1.4))
-        dest_w = min(image.width-x0, max(w+10, int(w*1.22)))
+        dest_h = max(h+18, int(h*1.75))
+        dest_w = min(image.width-x0, max(w+18, int(w*1.35)))
         tx = max(0, x+w//2-dest_w//2)
         ty = max(0, y+h//2-dest_h//2)
         dest_w = min(dest_w, image.width-tx)
@@ -143,12 +176,18 @@ def render_translations(image: Image.Image, regions: list[TextRegion], translati
             skipped.append({"index": index, "reason": "layout_not_inside_uniform_bubble"})
             continue
         font, lines, spacing, lh = fit
-        draw.rectangle((x0, y0, x1, y1), fill=(*bg, 255))
+        if not supports_text(font, text):
+            skipped.append({"index": index, "reason": "unsupported_glyph"})
+            continue
+        # Paint entire validated flat layout, not only the narrow OCR baseline.
+        # Never erase arbitrary texture or cross the checked region boundary.
+        draw.rectangle((tx, ty, tx + dest_w - 1, ty + dest_h - 1), fill=(*bg, 255))
         total = len(lines)*lh+(len(lines)-1)*spacing
         top = ty+max(0,(dest_h-total)//2)
         for line in lines:
-            left = tx+(dest_w-font.getlength(line))/2
-            draw.text((left,top), line, font=font, fill=(*fg,255), anchor="lt")
+            box = font.getbbox(line, anchor="lt")
+            left = tx + (dest_w-(box[2]-box[0]))/2 - box[0]
+            draw.text((left,top-box[1]), line, font=font, fill=(*fg,255), anchor="lt")
             top += lh+spacing
         applied += 1
     return overlay, applied, skipped

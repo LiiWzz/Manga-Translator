@@ -5,14 +5,18 @@ import io
 import os
 
 import httpx
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile, Request, Depends
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel
 
 from .bubble_renderer import TextRegion, overlay_data_url, render_translations
-from .ocr_grouping import extract_grouped_regions
+from .ocr_grouping import extract_grouped_regions, analyze_regions, diagnostic_packet
+from .oauth_routes import router as oauth_router
+from .provider_adapter import translate_chatgpt
+from .local_security import require_extension
 
-app = FastAPI(title="Manga Translator POC v0.2")
+app = FastAPI(title="Manga Translator POC v0.3")
+app.include_router(oauth_router)
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_PIXELS = 24_000_000
 
@@ -35,7 +39,8 @@ class RenderResponse(TranslateResponse):
     overlay_data_url: str
     applied_regions: int
     skipped: list[dict]
-    render_mode: str = "flat-bubble-overlay"
+    render_mode: str = "safe-flat-block-overlay"
+    diagnostics: dict | None = None
 
 
 def extract_regions(image: Image.Image):
@@ -43,7 +48,9 @@ def extract_regions(image: Image.Image):
 
 
 async def translate_texts(texts: list[str]) -> list[str]:
-    provider = os.getenv("TRANSLATOR_PROVIDER", "mock").lower()
+    provider = os.getenv("TRANSLATOR_PROVIDER", "chatgpt_oauth").lower()
+    if provider == "chatgpt_oauth":
+        return await translate_chatgpt(texts)
     if provider == "mock":
         return ["[TH DEMO] " + text for text in texts]
     if provider != "openai":
@@ -94,39 +101,44 @@ async def _decode_image(file: UploadFile) -> Image.Image:
         raise HTTPException(status_code=400,detail="Invalid image") from exc
 
 
-async def _process(file: UploadFile):
+async def _process(file: UploadFile, debug: bool = False):
     image = await _decode_image(file)
     try:
-        source = extract_regions(image)
+        analysis = analyze_regions(image) if debug else None
+        source = ([(list(r.bbox), r.source_text, r.confidence) for r in analysis.groups]
+                  if analysis is not None else extract_regions(image))
     except Exception as exc:
         raise HTTPException(status_code=503,detail="OCR unavailable") from exc
     translated = await translate_texts([txt for _,txt,_ in source])
     regions = [Region(bbox=box,source_text=txt,translated_text=translation,confidence=confidence)
                for (box,txt,confidence),translation in zip(source,translated)]
-    return image,source,translated,regions
+    return image,source,translated,regions,analysis
 
 
 @app.get("/health")
 def health():
-    return {"status":"ok","provider":os.getenv("TRANSLATOR_PROVIDER","mock")}
+    return {"status":"ok","provider":os.getenv("TRANSLATOR_PROVIDER","chatgpt_oauth")}
 
 
 @app.post("/api/v1/translate",response_model=TranslateResponse)
-async def translate(file: UploadFile = File(...)):
-    image,_,_,regions = await _process(file)
+async def translate(file: UploadFile = File(...), gate=Depends(require_extension)):
+    image,_,_,regions,_ = await _process(file)
     return TranslateResponse(image_width=image.width,image_height=image.height,regions=regions,
-                             provider=os.getenv("TRANSLATOR_PROVIDER","mock"))
+                             provider=os.getenv("TRANSLATOR_PROVIDER","chatgpt_oauth"))
 
 
 @app.post("/api/v1/translate-rendered",response_model=RenderResponse)
-async def translate_rendered(file: UploadFile = File(...)):
-    image,source,translations,regions = await _process(file)
+async def translate_rendered(file: UploadFile = File(...), debug: bool = False, gate=Depends(require_extension)):
+    image,source,translations,regions,analysis = await _process(file, debug=debug)
     try:
         overlay,applied,skipped = render_translations(
             image,[TextRegion(tuple(box),txt,confidence) for box,txt,confidence in source],translations)
     except RuntimeError as exc:
         raise HTTPException(status_code=503,detail=str(exc)) from exc
+    diagnostic = diagnostic_packet(analysis) if analysis is not None else None
+    if diagnostic is not None:
+        diagnostic["skipped"] = skipped
     return RenderResponse(image_width=image.width,image_height=image.height,regions=regions,
-                          provider=os.getenv("TRANSLATOR_PROVIDER","mock"),
+                          provider=os.getenv("TRANSLATOR_PROVIDER","chatgpt_oauth"),
                           overlay_data_url=overlay_data_url(overlay),
-                          applied_regions=applied,skipped=skipped)
+                          applied_regions=applied,skipped=skipped,diagnostics=diagnostic)

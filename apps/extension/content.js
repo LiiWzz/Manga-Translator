@@ -20,41 +20,109 @@
   cleanup.push(() => status.remove());
   const show = message => {status.textContent = "Manga Translator: " + message;};
 
-  const candidates = [...document.images].filter(img => {
-    const rect = img.getBoundingClientRect();
-    return img.complete && img.naturalWidth >= 350 && img.naturalHeight >= 250
-      && rect.width > 200 && rect.bottom > -300 && rect.top < innerHeight + 500;
-  }).slice(0, 3);
+  // Translate every eligible loaded image, including lazy-loaded ones discovered later.
+  // Budgeted serial dispatch avoids sending the whole page to the API at once.
+  const MAX_IMAGES = 120;
+  const SEND_INTERVAL_MS = 5500; // server POC budget: 12 translation requests/minute
+  const seen = new WeakSet();
+  const pending = [];
+  let active = false, completed = 0, replaced = 0, skipped = 0;
+  let cancelled = false;
+  let lastSent = 0;
+  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-  if (!candidates.length) {
-    show("No eligible image in the current viewport.");
-    return;
+  function eligible(image) {
+    return image.isConnected && image.complete &&
+      image.naturalWidth >= 350 && image.naturalHeight >= 250 &&
+      image.getBoundingClientRect().width > 200 &&
+      Boolean(image.currentSrc || image.src);
   }
-  let completed = 0, replaced = 0, skipped = 0;
-  show("Processing " + candidates.length + " images...");
-  for (const image of candidates) {
-    const url = image.currentSrc || image.src;
-    chrome.runtime.sendMessage({type: "MANGA_RENDER_TRANSLATE", url}, reply => {
-      if (chrome.runtime.lastError || !reply?.ok) {
-        console.warn("Manga Translator:", chrome.runtime.lastError?.message || reply?.error);
-      } else if (!image.isConnected) {
-        console.warn("Manga Translator: image was removed before translation completed");
-      } else {
-        replaced += reply.data.applied_regions || 0;
-        skipped += (reply.data.skipped || []).length;
-        if (reply.data.applied_regions > 0) renderOverlay(image, reply.data.overlay_data_url);
-        if (reply.data.provider === "mock") {
-          console.warn("Manga Translator: mock provider does not translate to Thai. Configure OPENAI_API_KEY on the backend.");
+
+  function discover() {
+    if (cancelled) return;
+    for (const image of document.images) {
+      if (seen.has(image) || !eligible(image)) continue;
+      if (seenCount >= MAX_IMAGES) break;
+      seen.add(image);
+      seenCount++;
+      pending.push(image);
+    }
+    if (pending.length) drain();
+    else if (!active) show("Completed " + completed + " images; " + replaced + " text regions translated, " + skipped + " skipped. Scroll to discover lazy images.");
+  }
+  let seenCount = 0;
+  async function drain() {
+    if (active || cancelled) return;
+    active = true;
+    while (pending.length && !cancelled) {
+      const image = pending.shift();
+      if (!image.isConnected) continue;
+      const delay = Math.max(0, SEND_INTERVAL_MS - (Date.now() - lastSent));
+      if (delay) await sleep(delay);
+      if (cancelled) break;
+      lastSent = Date.now();
+      show("Translating page: " + (completed + 1) + "/" + seenCount + " images...");
+      try {
+        const reply = await new Promise((resolve, reject) => {
+          chrome.runtime.sendMessage({type: "MANGA_RENDER_TRANSLATE", url: image.currentSrc || image.src}, response => {
+            if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+            resolve(response);
+          });
+        });
+        if (!reply?.ok) throw new Error(reply?.error || "Unknown translation failure");
+        if (image.isConnected) {
+          replaced += reply.data.applied_regions || 0;
+          skipped += (reply.data.skipped || []).length;
+          if (reply.data.applied_regions > 0) renderOverlay(image, reply.data.overlay_data_url);
+          if (reply.data.diagnostics) renderDebug(image, reply.data);
         }
+      } catch (error) {
+        skipped++;
+        console.warn("Manga Translator image failed:", error);
       }
       completed++;
-      if (completed === candidates.length) {
-        show(replaced
-          ? "Translated " + replaced + " text regions; skipped " + skipped + " unsafe regions."
-          : "No Thai rendered. Check AI provider and OCR/bubble detection in backend logs.");
-        setTimeout(() => { if (status.isConnected) status.remove(); }, 9000);
-      }
+    }
+    active = false;
+    if (!cancelled) show("Processed " + completed + "/" + seenCount +
+      " images, translated " + replaced + " regions; skipped " + skipped +
+      ". Scroll down to load more images.");
+  }
+
+  function scan() {
+    discover();
+  }
+  document.addEventListener("load", scan, true);
+  const observer = new MutationObserver(scan);
+  observer.observe(document.documentElement, {childList: true, subtree: true, attributes: true, attributeFilter: ["src", "srcset"]});
+  cleanup.push(() => {
+    cancelled = true;
+    document.removeEventListener("load", scan, true);
+    observer.disconnect();
+  });
+  discover();
+
+  function renderDebug(image, data) {
+    const canvas = document.createElement("canvas");
+    canvas.width = data.image_width;
+    canvas.height = data.image_height;
+    const ctx = canvas.getContext("2d");
+    const skipped = new Map((data.skipped || []).map(v => [v.index, v.reason]));
+    (data.regions || []).forEach((r, index) => {
+      const [x, y, w, h] = r.bbox;
+      ctx.strokeStyle = skipped.has(index) ? "#ff4444" : "#00cc66";
+      ctx.lineWidth = 3;
+      ctx.strokeRect(x, y, w, h);
+      const reason = skipped.get(index) || "rendered";
+      const label = index + ": " + reason + " / " + String(r.source_text).slice(0, 65);
+      ctx.font = "bold 16px sans-serif";
+      ctx.fillStyle = "#ffffff";
+      const labelWidth = Math.min(canvas.width - x, ctx.measureText(label).width + 8);
+      ctx.fillStyle = skipped.has(index) ? "#992222" : "#006633";
+      ctx.fillRect(x, Math.max(0, y - 21), labelWidth, 21);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(label, x + 3, Math.max(16, y - 5));
     });
+    renderOverlay(image, canvas.toDataURL("image/png"));
   }
 
   function renderOverlay(image, url) {

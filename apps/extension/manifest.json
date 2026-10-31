@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
   "name": "Manga Translator POC",
-  "version": "0.2.0",
-  "description": "Replace English manga bubble lettering with Thai on flat backgrounds.",
-  "permissions": ["activeTab", "scripting"],
+  "version": "0.3.0",
+  "description": "Local manga translator with Sign in with ChatGPT.",
+  "permissions": ["activeTab", "scripting", "storage"],
   "host_permissions": [
     "http://127.0.0.1:8000/*",
     "https://cdn.asurascans.com/*"
   ],
   "action": {"default_title": "Translate visible images"},
+  "options_page": "options.html",
   "background": {"service_worker": "background.js"}
 }

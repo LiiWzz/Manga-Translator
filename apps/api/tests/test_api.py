@@ -3,6 +3,14 @@ import io
 from PIL import Image,ImageDraw
 from fastapi.testclient import TestClient
 from app.main import app
+from app.local_security import require_extension
+import pytest
+
+@pytest.fixture(autouse=True)
+def legacy_api_auth_override():
+    app.dependency_overrides[require_extension] = lambda: None
+    yield
+    app.dependency_overrides.pop(require_extension, None)
 
 client = TestClient(app)
 

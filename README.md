@@ -2,7 +2,11 @@
 
 Chrome Extension for translating English manga dialogue into Thai through a **local FastAPI gateway**. v0.3 adds officially supported OpenAI Sign in with ChatGPT for eligible open-source/local apps, **without requiring an API key**.
 
-**Status:** Draft PR / prototype. Unit and CI checks cover mocked OAuth behavior. A real ChatGPT login and a live Responses API call have **not yet been validated**. Do not distribute as a production-ready auth service.
+**Status:** Draft PR / local prototype. Unit and CI checks cover mocked OAuth behavior. Live Reader inference has been exercised with a connected account, and the user accepted the latest translation fix. Full OAuth/browser and security acceptance remains incomplete; this is not a production-ready auth service.
+
+## Development direction
+
+The current Reader branch uses **Vision + Chrome Side Panel** and has a user-accepted translation fix. Upcoming work prioritizes reliability, persistent cache/edits, translation quality, selected-region translation and controlled continuous reading. **Optional overlay may be explored in v2**, subject to visual-quality and cost evaluation; it is not a committed feature and is distinct from the historical v0.2 prototype. See the [development roadmap](docs/POC_PLAN.md) and [current Reader workflow](docs/READER_V04.md). The v0.3 setup below describes the earlier OAuth/overlay branch.
 
 ## Requirements
 

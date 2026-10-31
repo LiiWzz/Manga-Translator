@@ -1,157 +1,170 @@
-# Manga Translator v0.3 — Sign in with ChatGPT (OSS/local POC)
+# Manga Thai Reader
 
-Chrome Extension for translating English manga dialogue into Thai through a **local FastAPI gateway**. v0.3 adds officially supported OpenAI Sign in with ChatGPT for eligible open-source/local apps, **without requiring an API key**.
+**English manga dialogue → Thai, beside the original page.**
 
-**Status:** Draft PR / local prototype. Unit and CI checks cover mocked OAuth behavior. Live Reader inference has been exercised with a connected account, and the user accepted the latest translation fix. Full OAuth/browser and security acceptance remains incomplete; this is not a production-ready auth service.
+[![CI](https://github.com/LiiWzz/Manga-Translator/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/LiiWzz/Manga-Translator/actions/workflows/ci.yml)
+[Desktop builds](https://github.com/LiiWzz/Manga-Translator/actions/workflows/desktop.yml) · [Setup](#quick-start) · [Reader guide](docs/READER_V04.md) · [Roadmap](docs/POC_PLAN.md)
 
-## Development direction
+A Chrome extension with a local companion that translates manga into a Thai reading panel. The current **v0.4 Reader** uses a vision model to read dialogue while preserving the original image. Run the companion on Windows or macOS, or use Docker for development. Connect your own eligible ChatGPT account for real translation; the default mock mode provides generated demo text without provider calls.
 
-The current Reader branch uses **Vision + Chrome Side Panel**. The reliability baseline has user-reported Chrome acceptance. The next feature branch adds [persistent local cache and corrections](docs/READER_CACHE.md), with automated checks passing and real Chrome acceptance pending. Translation quality, selected-region translation and controlled continuous reading follow in that order. **Optional overlay may be explored in v2**, subject to visual-quality and cost evaluation; it is not a committed feature and is distinct from the historical v0.2 prototype. See the [development roadmap](docs/POC_PLAN.md) and [current Reader workflow](docs/READER_V04.md). Earlier OAuth/overlay details are retained in [the v0.3 notes](docs/OAUTH_V03.md).
+**Status:** The Reader, persistent cache, Settings, model controls and desktop companion are included in `main`. Live Reader inference has been exercised, and the reliability baseline has user-reported Chrome acceptance. This remains a local, single-user POC: desktop bundles are unsigned test builds, and clean-machine installation, broader account flows and newer Reader/Settings features still have acceptance work pending.
 
-The current Settings branch adds [pair-once setup](docs/SETTINGS_PAIR_ONCE.md): a
-temporary code issued from the local terminal authorizes the extension, which
-remembers separate translation and Settings permissions. Normal use no longer
-requires an admin key. Thai connection status and a model dropdown replace raw
-JSON and model-slug copying. Real Chrome acceptance of this flow is pending.
+<img src="docs/assets/reader-panel-dark.png" alt="Thai Reader panel with optional English dialogue and a translate button" width="320">
 
-The [Reader model picker](docs/READER_MODELS.md) builds on that Settings branch.
-Reader automatically loads the connected account's available models and shows
-the current model plus the number of choices in its header. Open it to select a
-new model without leaving the panel. Selection saves immediately,
-preserves displayed dialogue and unsaved edits, and applies to the next explicit
-translation. Controls prevent changing models during this panel's queue or
-starting translation during a model save. Real Chrome acceptance is pending.
+*Reader layout preview with generated dialogue. See [panel design](docs/READER_PANEL_DESIGN.md) for more views.*
 
-## Requirements
+## What you can do
 
-For the Windows/macOS desktop companion (no Docker or Python needed on your
-friend's machine), see [sharing with friends](docs/DESKTOP_DISTRIBUTION.md).
-The native packaging workflow and local mock acceptance are separate from live
-account/browser acceptance; unsigned test bundles are not a public release.
+| Feature | Behavior |
+| --- | --- |
+| Read beside the page | Thai-first Chrome Side Panel, optional English, adjustable text size and light/dark appearance. Original image pixels stay untouched. |
+| Translate on demand | Process up to three eligible, visible images per click. Tall strips use bounded overlapping crops to retain detail. |
+| Keep translations and corrections | Save dialogue and your edits in the Chrome profile. Matching results are reused after image, settings and context checks. |
+| Choose the next model | Load your account's model choices directly in Reader. Changing selection preserves displayed dialogue and edits; each result keeps its original model label. |
+| Recover from failures | Persistent per-image errors and explicit retries, with guidance for pairing, reconnecting, model support and usage limits. |
+| Run without Docker | The Windows/macOS companion starts the local gateway, exports the extension and generates a pairing code. |
 
-The source/Docker setup below remains available for development.
+## Quick start
 
-- Docker Desktop / Docker Engine
-- Chrome desktop
-- Eligible ChatGPT plan and explicit ChatGPT plan-sharing consent
-- Authorized image hosting for manga pages
+Use desktop Chrome and images you have permission to access and translate. Real translation also requires an eligible account, explicit ChatGPT plan-use consent, an available vision-capable model and remaining usage allowance.
 
-## Install and run
+| Setup | You need | Extension folder |
+| --- | --- | --- |
+| Desktop companion | Chrome + a Windows x64, Mac Apple Silicon or Mac Intel test bundle. Current Mac bundles require macOS 14+. | The stable folder opened by the companion. |
+| Docker/source | Chrome + Git + Docker Desktop/Engine with Compose. | `apps/extension` in your checkout. |
+
+### Option A: desktop companion
+
+1. Open [Desktop companion builds](https://github.com/LiiWzz/Manga-Translator/actions/workflows/desktop.yml), select a successful run with artifacts, and download the artifact for your OS/architecture. It contains an app ZIP, a SHA-256 file and the bundled Thai guide. Artifact availability depends on retention; these are test builds, not signed installers.
+2. Extract the ZIP. Keep the complete Windows app folder together; on macOS, move `MangaThaiReader.app` to Applications. See the [distribution guide](docs/DESKTOP_DISTRIBUTION.md) for build and signing status.
+3. Open the app. First launch starts in **ทดลองใช้งาน** (mock mode). Keep its window open while reading; closing it stops the gateway.
+4. Click **เปิดโฟลเดอร์ extension**. In Chrome, open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select the folder the app opened.
+5. Open the extension's **Options**. In the companion, click **สร้างรหัสจับคู่**, paste the code into Options, explicitly allow translation and Settings management, then click **จับคู่และจำเครื่องนี้**.
+6. To enable real translation, stop the gateway, choose **ใช้ ChatGPT**, and start it again. Continue with [Connect ChatGPT](#connect-chatgpt).
+
+The app remembers your mode and pairing across restarts. Run one local gateway at a time: stop a Docker backend or older companion before starting another.
+
+<details>
+<summary>Desktop companion preview</summary>
+
+<img src="docs/assets/desktop-companion.png" alt="Desktop companion with mode selection, extension export and pairing controls" width="640">
+
+</details>
+
+### Option B: Docker/source
+
+Clone the current `main`:
+
+```sh
+git clone https://github.com/LiiWzz/Manga-Translator.git
+cd Manga-Translator
+cp .env.example .env
+docker compose up --build -d
+curl http://127.0.0.1:8000/health
+```
+
+For an existing checkout, update before rebuilding:
 
 ```sh
 git fetch origin
-git switch fix/settings-extension-get-origin
-git pull origin fix/settings-extension-get-origin
+git switch main
+git pull --ff-only origin main
+docker compose up --build -d
 ```
 
-Check `.env`, or create it with `cp .env.example .env`. Make sure it contains:
+The default `TRANSLATOR_PROVIDER=mock` generates clearly labeled demo dialogue. To translate real images, set this value in your local `.env`, then run `docker compose up --build -d` again:
 
 ```dotenv
 TRANSLATOR_PROVIDER=chatgpt_oauth
 ```
 
-The API, Compose and `.env.example` default to `mock`: Reader shows clearly
-marked generated demo text without calling OpenAI. Set `chatgpt_oauth` explicitly
-for real image translation. Existing `.env` values remain authoritative.
+Existing `.env` values remain authoritative. Keep this file private.
 
-```sh
-docker compose up --build -d
-curl http://127.0.0.1:8000/health
-```
-
-In Chrome, open `chrome://extensions` → Enable **Developer Mode** → **Load unpacked** → select `apps/extension`. If already installed, click **Reload**.
-
-**Pair with this machine (required once for the new Settings flow):**
+In Chrome, open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select `apps/extension`. Generate a pairing code:
 
 ```sh
 docker compose exec api python -m app.local_security pair
 ```
 
-Open Extension Options, paste the temporary code, explicitly allow translation
-and local Settings management, and click **จับคู่และจำเครื่องนี้**. The code is
-single-use and expires after ten minutes. No permanent admin key needs to be
-created or saved. Do not share the code or include it in logs or bug reports.
-Completing a new pairing replaces the previous extension. Existing ChatGPT
-connection and saved translations are retained.
+Open the extension's **Options**, enter the code, explicitly allow translation and Settings management, and click **จับคู่และจำเครื่องนี้**. Continue below for real translation; mock mode is already available after pairing.
 
-Click **จัดการการเชื่อมต่อ** in Extension Options. This opens an authenticated
-local Settings tab without putting credentials in its URL. Opening `/settings`
-directly remains locked unless this browser already has a valid Settings session.
+Pairing codes are single-use and expire after ten minutes. A completed new pairing replaces the previous extension's authority while retaining the ChatGPT connection and saved translations. Routine setup does not require a permanent admin key. See [pair-once setup and recovery](docs/SETTINGS_PAIR_ONCE.md).
 
-1. Click **เชื่อมต่อ ChatGPT**. This opens the official OpenAI authorization page.
-2. Complete registration and review the requested ChatGPT plan-use consent.
-3. Return to local Settings and confirm the account and plan permission are connected.
-4. Select a model from the account-specific dropdown and click **บันทึกโมเดล**.
-   Choose a vision-capable model; the catalog alone does not establish image support.
-5. Return to your authorized manga-reader tab, open the extension Side Panel and
-   click **แปลภาพที่เห็น**. It attempts up to three eligible images.
+### Connect ChatGPT
 
-Later visits to Extension Options show the connection status and next action.
-Opening management settings reuses the remembered extension permission; its
-browser session lasts at most 30 minutes. If it expires, reopen from Options.
-Re-pairing or revoking the extension invalidates its management sessions. Legacy
-reader-only pairing continues to translate but needs explicit new pairing for
-Settings authority. Old admin-key unlock remains under recovery. See
-[pair-once behavior and acceptance](docs/SETTINGS_PAIR_ONCE.md) and the
-[security notes](docs/SECURITY_V031.md).
+1. In extension Options, click **จัดการการเชื่อมต่อ** to open authenticated local Settings.
+2. Click **เชื่อมต่อ ChatGPT**, sign in with your own account, and review the requested plan-use consent.
+3. Return to Settings, confirm connection/permission status, choose an available vision-capable model, and click **บันทึกโมเดล**. A catalog listing alone does not prove image support or remaining quota.
+4. Open your authorized manga page and click the extension's toolbar icon to open Reader.
 
-If sign-in fails, inspect the localhost Settings error. The callback and model discovery have not been verified with a live account in this POC; do not expose secrets in support reports.
+Open Settings through the extension again if its browser session expires. Directly opening `/settings` requires an existing valid session or the recovery flow. Provider credentials remain in the local gateway; the extension holds separate local pairing credentials.
 
-Connection/model reliability checks now prevent a late token refresh from
-restoring an older account or model. Browser Settings model forms carry an
-account-selection version and recheck management authority immediately before
-saving. Reload a Settings page opened before this update before saving a model.
-Terminal refresh failures offer reconnection with the saved registration;
-temporary provider/network failures preserve credentials. The API returns safe
-error categories and the model associated with a validated Reader result.
-Installed Chrome/OAuth acceptance of this follow-up remains pending.
+## Read, edit and reuse
 
-Options and Reader now distinguish expired connections, plan permission,
-usage limits, unsupported capabilities and temporary provider failures. Reader
-stops unsent queue items for account/usage/model-wide failures and offers a
-Settings or Usage action. Ordinary image errors still have explicit retries.
-The extension displays app-owned recovery text rather than raw provider errors.
+1. Click **แปลภาพที่เห็น**. If prompted, choose **อนุญาตเว็บไซต์** and grant Chrome access to that specific site. Reader attempts up to three loaded, visible images in sequence.
+2. Read the Thai dialogue, optionally show English, or use **ไปยังภาพ** to locate its source. Scroll and click translate again for later images.
+3. Use **แก้คำแปล → บันทึก** to save a correction. Reopening the panel and scanning the same inputs can restore saved dialogue and edits without another inference request.
+4. Use **แปลครั้งถัดไป** to change the model for the next explicit scan/retry. Existing results retain their source model; changing selection alone never starts translation.
 
-The Reader picker is labeled **แปลครั้งถัดไป**. Each result retains its source
-model through model changes, edits and cache reloads. Older cached results with
-no model metadata display an unknown-model label; they are never assigned the
-currently selected model. Mock results are visibly marked as generated demo text.
+From the Reader menu, **เริ่มใหม่** clears the current panel/context while retaining saved results. **ลบคำแปลที่บันทึกไว้** deletes all saved Reader dialogue/corrections in this Chrome profile while preserving pairing and preferences. Failed images offer **ลองใหม่** for an explicit retry.
 
-## Architecture
+Saved results expire after seven days and are bounded to **4 MiB / 200 entries**. Reuse checks current image content, model/account settings and context, so the gateway and image access are still required. Reset or navigation stops queued submissions and discards stale replies; already submitted inference may still consume usage. For same-URL chapter changes, use **เริ่มใหม่** manually. See [cache behavior](docs/READER_CACHE.md) and [model selection](docs/READER_MODELS.md).
 
-- Chrome MV3 extension: image detection, limited CDN loading, safe overlay.
-- FastAPI: OCR (Tesseract), translation provider adapter, transparent bubble renderer.
-- OAuth: state / nonce / PKCE, issued client ID, JWKS ID-token verification, granted-scope gate, refresh rotation.
-- File storage on an owner-only Docker volume. Tokens remain server-side and never go into the Chrome extension.
-- Model selection from the connected account's `GET /v1/models` catalog.
-- Responses API stream with `store: false`, `stream: true`; waits for `response.completed`.
+## Privacy, permissions and limits
 
-## Tests
+- **Local gateway:** single user, one backend worker, listening through `127.0.0.1:8000`. Keep it on your machine; do not expose or port-forward the service.
+- **Provider data:** in ChatGPT mode, requested images and bounded preceding dialogue context are sent to the provider. Mock mode makes no provider calls. Vision requests can consume account usage, especially for tall strips.
+- **Account storage:** OAuth credentials stay in local files, outside browser code and Reader cache. Storage is plaintext, without OS keychain encryption; POSIX permissions restrict access to the owner. Desktop data is separate from Docker's volume. See [desktop data locations and updates](docs/DESKTOP_DISTRIBUTION.md#data-and-updates).
+- **Local authorization:** translation routes require pairing credentials; Settings uses separate management authority, session/CSRF checks and caller checks. Pairing does not protect against every process with access to your OS account. See the [security notes](docs/SECURITY_V031.md) for the threat model and outstanding work.
+- **Chrome access:** the manifest includes localhost and the existing configured CDN; other sites need explicit optional site access. Image fetching remains subject to host permissions, redirect, MIME and size restrictions. It does not bypass paywalls or anti-bot protections.
+- **Translation quality:** vision can miss, duplicate or misorder dialogue. Image input is bounded to 8 MiB / 24 MP; tall strips allow at most eight crops and 8 MiB of combined data URLs. This is not whole-chapter translation or a linguistic-quality guarantee.
+- **Distribution:** desktop bundles support the Vision Reader. The historical OCR/overlay path needs Tesseract and Thai raster fonts that are not bundled. OS signing/notarization and Chrome Web Store publication are not configured.
 
-GitHub Actions checks backend and extension syntax. To run locally:
+## Troubleshooting
+
+| Symptom | Next step |
+| --- | --- |
+| Demo text instead of translation | Desktop: stop, select **ใช้ ChatGPT**, restart. Docker: set `TRANSLATOR_PROVIDER=chatgpt_oauth` and recreate the service. Then connect and select a vision-capable model. |
+| Gateway offline or port occupied | Keep the companion open, or check `docker compose ps` and `/health`. Stop the other gateway before starting this one. |
+| Pairing rejected or Settings locked | Check Options status and reopen Settings from **จัดการการเชื่อมต่อ**. If pairing was revoked or replaced, issue a new code and grant the required permissions. |
+| No eligible images or site access denied | Grant access only to the intended site, scroll until images load, and try again. See [image-fetch troubleshooting](docs/CORS_TROUBLESHOOTING.md). |
+| Expired connection, unsupported model or usage limit | Follow the displayed reconnect, Settings or Usage action. Reader stops unsent work for account/model-wide failures; retry explicitly when resolved. |
+| Old UI after an update | Reload the existing unpacked extension in `chrome://extensions`, reopen Reader and refresh the manga page. Desktop users should refresh the exported extension folder first. |
+
+## Development and validation
+
+The Chrome MV3 extension scans permitted images and manages Reader/cache UI. A local FastAPI gateway validates pairing, serves Settings and coordinates model inference. The desktop app wraps that same gateway; Docker is an alternative runtime. Historical OCR/rendering modules remain separate from the Vision Reader flow.
+
+From the repository root, with Python 3.11+ and Node.js available:
 
 ```sh
-cd apps/api
-pip install -e '.[test]'
-pytest -q
+python -m venv .venv
+# Activate the environment using your shell's command, then:
+python -m pip install -e 'apps/api[test]'
+MANGA_AUTH_DIR="$(mktemp -d)" TRANSLATOR_PROVIDER=mock python -m pytest apps/api/tests -q
+
+for file in apps/extension/*.js; do node --check "$file" || exit; done
+node apps/extension/test-sidepanel-wiring.cjs
+python -m json.tool apps/extension/manifest.json > /dev/null
+git diff --check
 ```
 
-Local tests need a Thai TrueType font (`THAI_FONT_PATH`) or a system package such as `fonts-noto-core`.
+The command block uses a POSIX shell. API tests include historical renderer tests: install a Thai TrueType font and set `THAI_FONT_PATH`, or install `fonts-noto-core` on Linux. Desktop UI tests require the optional `apps/api[desktop,test]` dependencies; without Qt those tests skip. Headless desktop tests use `QT_QPA_PLATFORM=offscreen`. Build and frozen-executable smoke commands are in the [desktop guide](docs/DESKTOP_DISTRIBUTION.md#building-and-downloading-test-bundles).
 
-## Important limitations
+[CI](.github/workflows/ci.yml) runs the API suite and extension syntax/behavior checks. The [desktop workflow](.github/workflows/desktop.yml) builds and smoke-tests frozen apps on Windows x64, Mac Apple Silicon and Mac Intel using mock translation and temporary credentials. Automated checks and generated-data previews are separate from installed-Chrome, live-account and translation-quality acceptance.
 
-- **Single local user only**. Do not port-forward or expose port 8000.
-- Plaintext OAuth credentials in owner-only storage (0600/0700), not an encrypted OS keychain.
-- In-memory OAuth transaction only, requiring one backend worker. Restarting during authorization invalidates the attempt.
-- The pre-existing translate endpoint is not protected from all local callers; treat as security debt before distribution.
-- OAuth sign-in does not guarantee `chatgpt.tokens.use.direct` permission or unlimited model use.
-- OCR is line-grouping heuristic; bubble renderer skips textured/unsafe regions, not full inpainting.
-- Respect manga licensing and website permissions.
+## Project notes
 
-See [OAuth implementation and security review](docs/OAUTH_V03.md), [Bubble rendering acceptance](docs/V02_ACCEPTANCE.md), and [CDN troubleshooting](docs/CORS_TROUBLESHOOTING.md).
+| Topic | Guide |
+| --- | --- |
+| Reader workflow, bounds and acceptance | [Reader v0.4](docs/READER_V04.md) |
+| Local persistence and corrections | [Reader cache](docs/READER_CACHE.md) |
+| Pairing, connection and recovery | [Settings](docs/SETTINGS_PAIR_ONCE.md) |
+| Model choice and result provenance | [Reader models](docs/READER_MODELS.md) |
+| Desktop setup, data, updates and packaging | [Desktop distribution](docs/DESKTOP_DISTRIBUTION.md) |
+| Priorities and future scope | [Roadmap](docs/POC_PLAN.md) · [Idea backlog](docs/READER_IDEAS.md) |
+| Historical implementation | [OAuth v0.3](docs/OAUTH_V03.md) · [Overlay v0.2](docs/V02_ACCEPTANCE.md) |
 
-## Source documents
+Next work prioritizes translation-quality evaluation and glossary support, then selected-region translation and controlled continuous reading. Optional overlay remains a possible v2 investigation, subject to artwork, geometry and cost evidence. Detailed guides retain historical branch/PR acceptance records; use this README for current `main` setup.
 
-- https://developers.openai.com/siwc/token-sharing-open-source/sign-in
-- https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference
-- https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions
+Use feature branches and PRs, keep tests deterministic with the mock provider, and obtain human review for origin-permission expansion. Keep credentials, pairing codes and unlicensed manga assets out of commits, logs and fixtures. Respect creators' rights and website permissions.

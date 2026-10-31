@@ -30,6 +30,28 @@ test("cache whitelists dialogue fields and never copies credentials, image bytes
   assert.doesNotMatch(raw, /not-a-real-token|private.example|data:image|test-only-capability/);
 });
 
+test("model provenance survives cache restart and edits without moving between models", async () => {
+  const local = storage(), cache = new ReaderCache(local), epoch = await cache.begin();
+  await cache.put(key("a"), {...result(), model: "generated-model-a", email: "private@example.invalid"}, epoch);
+  await cache.put(key("b"), {...result(), model: "generated-model-b"}, epoch);
+  await cache.edit(key("a"), 0, "คำแก้ไข", epoch);
+  const reopened = new ReaderCache(local), current = await reopened.begin();
+  assert.equal((await reopened.get(key("a"), current)).model, "generated-model-a");
+  assert.equal((await reopened.get(key("b"), current)).model, "generated-model-b");
+  assert.equal((await reopened.get(key("a"), current)).regions[0].translated_text, "คำแก้ไข");
+  assert.doesNotMatch(JSON.stringify(local.values[ReaderCache.storageKey]), /private@example/);
+});
+
+test("legacy cache results remain readable with unknown model provenance", async () => {
+  const local = storage(), cache = new ReaderCache(local), epoch = await cache.begin();
+  await cache.put(key("a"), result(), epoch);
+  delete local.values[ReaderCache.storageKey].entries[0].data.model;
+  const reopened = new ReaderCache(local);
+  const value = await reopened.get(key("a"), await reopened.begin());
+  assert.equal(value.model, null);
+  assert.equal(value.regions[0].translated_text, "สวัสดี");
+});
+
 test("absolute expiry removes original dialogue and edits even after recent access", async () => {
   let time = 0;
   const local = storage(), cache = new ReaderCache(local, {now: () => time, ttl: 100});

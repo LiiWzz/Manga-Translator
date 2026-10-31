@@ -443,6 +443,23 @@ test("unknown error response text never reaches Reader", async () => {
   assert.doesNotMatch(result.error, /PRIVATE/);
 });
 
+test("displayed dialogue keeps its source model when the next model changes", async () => {
+  const h = harness({modelAccess: true});
+  h.state.translate = async () => ({ok: true, data: {regions: [{source_text: "HELLO", translated_text: "สวัสดี"}], model: "vision-a"}});
+  await settle(); await h.scan();
+  assert.match(h.text(), /โมเดลของคำแปลนี้: vision-a/);
+  await h.openModels(); await h.chooseModel("vision-b");
+  assert.equal(h.elements["model-current"].textContent, "Vision B");
+  assert.match(h.text(), /โมเดลของคำแปลนี้: vision-a/);
+  assert.equal(h.state.calls.length, 1);
+});
+
+test("Reader marks a legacy result as unknown instead of borrowing the selected model", async () => {
+  const h = harness({modelAccess: true}); await settle(); await h.scan();
+  assert.match(h.text(), /ไม่ทราบโมเดลที่ใช้/);
+  assert.doesNotMatch(h.text(), /โมเดลของคำแปลนี้: vision-a/);
+});
+
 test("provider permission failure does not revoke valid model management pairing", async () => {
   const h = harness({modelAccess: true}); await settle();
   h.state.modelRequest = path => path.endsWith("/models") ? {ok: false, status: 403,

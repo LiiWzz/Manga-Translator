@@ -334,3 +334,12 @@ existing retry behavior. Provider permission failures do not revoke valid local
 management pairing. Extension regressions pass 111 tests, with JavaScript syntax,
 manifest JSON and diff checks passing. These changes do not submit automatic
 inference or expand permissions.
+
+Result labels on `feat/reader-translation-model-labels` distinguish the next
+selection from each displayed result's original model. Cached edits and legacy
+entries retain their data; missing metadata is shown as unknown. The full stack
+passes 147 API tests and 115 extension regressions, with syntax, manifest and diff
+checks passing. BrowserOS neo verified model A's result label remains after
+selecting B, with no new inference, and no horizontal overflow at 280/360/480 px.
+The generated reconnect Settings has a primary reconnect button. These are
+generated-data previews; real installed Chrome/OAuth acceptance remains pending.

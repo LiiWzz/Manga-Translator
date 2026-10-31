@@ -1,5 +1,31 @@
 # Change models from Reader
 
+## Connection/recovery and result labels follow-up (2026-10-29)
+
+The three-PR [Settings follow-up](SETTINGS_PAIR_ONCE.md#connection-and-model-improvement-plan)
+adds coordinated account/model writes, stale browser-form rejection, reconnect
+recovery and categorized errors. The picker now says **แปลครั้งถัดไป**. Each
+accepted image result displays its own model slug; changing the selection keeps
+the existing result's label and unsaved edits. Model metadata persists alongside
+cached dialogue and corrections, with the existing TTL, size and clear-data limits.
+Legacy entries without metadata display **ไม่ทราบโมเดลที่ใช้**, retain their
+dialogue, and are not relabeled using today's selection. Existing OAuth cache
+fingerprints are retained; mock/demo results use a separate provider namespace.
+
+The API binds result metadata to the selected profile and rejects account/model
+changes during inference. The default mock path displays clearly marked generated
+text and never sends the image to OpenAI. Real OAuth translation remains explicit.
+
+Verification: 147 isolated mocked API tests, 115 extension regressions, all
+extension JavaScript syntax checks, manifest JSON and diff checks pass. BrowserOS
+neo exercised the actual Reader scripts with generated Chrome/provider data:
+after one generated translation using A, selecting B retained A's result label
+and the inference count stayed at one. At widths 280/360/480 px, the open picker
+had no horizontal overflow and the translate action remained visible at 640 px
+height. Generated reconnect Settings exposed the primary reconnect action.
+These previews do not certify the installed extension or live OAuth; those
+acceptance checks remain pending and the PRs remain Draft.
+
 Implemented 2026-10-28, stacked on Settings PR #10. This adds a model control to
 the Reader header without changing the Reader roadmap milestone order.
 

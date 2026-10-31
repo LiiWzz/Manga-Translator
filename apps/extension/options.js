@@ -57,7 +57,7 @@ async function refresh() {
     } catch {
       if (!current()) return;
       row("gateway-state", "ยังเชื่อมต่อไม่ได้"); row("summary", "เปิดระบบแปลก่อน");
-      row("next-step", "ตรวจว่า Docker และระบบแปลกำลังทำงาน แล้วกดตรวจอีกครั้ง");
+      row("next-step", "เปิดแอป Manga Thai Reader ให้ระบบแปลพร้อมใช้งาน แล้วกดตรวจอีกครั้ง");
       byId("offline-help").hidden = false;
       byId("forget").hidden = byId("forget-help").hidden = !reader && !manager;
       byId("pair-section").hidden = true;
@@ -78,7 +78,7 @@ async function refresh() {
       if (!current()) return;
       if (response.status === 401 || response.status === 403) {
         row("pair-state", "การจับคู่หมดสิทธิ์แล้ว"); row("summary", "จับคู่ใหม่เพื่อใช้งานต่อ");
-        row("next-step", "รันคำสั่งและใช้รหัสใหม่ด้านล่าง บัญชีและคำแปลที่บันทึกไว้ยังอยู่");
+        row("next-step", "สร้างรหัสใหม่จากแอป Manga Thai Reader แล้วกรอกด้านล่าง บัญชีและคำแปลที่บันทึกไว้ยังอยู่");
         byId("pair-section").hidden = false;
         return;
       }
@@ -100,10 +100,10 @@ async function refresh() {
       byId("pair-section").hidden = management && !pairingRequested;
       if (!management) {
         row("summary", "จับคู่ใหม่เพื่อเปิด Settings ได้สะดวกขึ้น");
-        row("next-step", "การจับคู่เดิมยังใช้แปลได้ รหัสจากคำสั่งด้านล่างจะเพิ่มสิทธิ์จัดการการเชื่อมต่อเมื่อคุณยินยอม");
+        row("next-step", "การจับคู่เดิมยังใช้แปลได้ สร้างรหัสจากแอปแล้วจับคู่ใหม่เพื่อเพิ่มสิทธิ์จัดการการเชื่อมต่อเมื่อคุณยินยอม");
       } else if (health.provider !== "chatgpt_oauth") {
         row("summary", "ระบบกำลังใช้ตัวแปลทดสอบหรือผู้ให้บริการอื่น");
-        row("next-step", "หากต้องการใช้ ChatGPT ให้ตั้ง TRANSLATOR_PROVIDER=chatgpt_oauth แล้วเริ่มระบบแปลใหม่");
+        row("next-step", "ในแอป หยุดระบบแปล เลือก “ใช้ ChatGPT” แล้วเริ่มใหม่ หากใช้ Docker ให้ดูวิธีเปลี่ยนโหมดในหัวข้อขั้นสูง");
       } else if (state.reconnect_required) {
         row("account-state", "ต้องเชื่อมต่อใหม่");
         row("summary", "การเชื่อมต่อ ChatGPT หมดอายุ");
@@ -151,7 +151,7 @@ byId("pair-form").addEventListener("submit", async event => {
     if (!response.ok) {
       const message = response.status === 429 ? "ลองหลายครั้งเกินไป รอหนึ่งนาทีแล้วลองใหม่"
         : response.status === 409 ? "ต้องยืนยันสิทธิ์จัดการ Settings ก่อนจับคู่"
-          : "รหัสไม่ถูกต้องหรือหมดอายุ รันคำสั่งเพื่อสร้างรหัสใหม่";
+          : "รหัสไม่ถูกต้องหรือหมดอายุ สร้างรหัสใหม่จากแอปหรือคำสั่ง Docker";
       feedback(message, true); return;
     }
     const data = await response.json();

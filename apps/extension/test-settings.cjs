@@ -82,6 +82,7 @@ test("Settings shows offline recovery while preserving remembered pairing", asyn
   const app = await ready({offline: true, values: remembered()});
   assert.match(app.el("summary").textContent, /เปิดระบบแปล/);
   assert.equal(app.el("offline-help").hidden, false);
+  assert.match(app.el("next-step").textContent, /เปิดแอป Manga Thai Reader/);
   assert.equal(app.el("forget").hidden, false);
   assert.equal(app.el("connect").disabled, true);
   assert.equal(app.values.mangaSettingsCapability, "generated-manager");
@@ -132,6 +133,7 @@ for (const [name, account, pattern] of [
 test("mock provider is identified instead of promising ChatGPT readiness", async () => {
   const app = await ready({values: remembered(), provider: "mock"});
   assert.match(app.el("summary").textContent, /ตัวแปลทดสอบ/);
+  assert.match(app.el("next-step").textContent, /ในแอป.*ใช้ ChatGPT/);
 });
 
 test("legacy reader pairing does not acquire Settings authority", async () => {

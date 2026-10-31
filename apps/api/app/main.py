@@ -1,16 +1,18 @@
-"""Manga Translator POC API. Do not expose this unauthenticated demo on public internet."""
+"""Manga Translator local-only POC v0.2."""
+from __future__ import annotations
+
 import io
 import os
-import re
-from typing import Literal
 
 import httpx
-import pytesseract
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel
 
-app = FastAPI(title="Manga Translator POC")
+from .bubble_renderer import TextRegion, overlay_data_url, render_translations
+from .ocr_grouping import extract_grouped_regions
+
+app = FastAPI(title="Manga Translator POC v0.2")
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_PIXELS = 24_000_000
 
@@ -29,29 +31,15 @@ class TranslateResponse(BaseModel):
     provider: str
 
 
-def extract_regions(image: Image.Image) -> list[tuple[list[int], str, float]]:
-    """Group Tesseract words by paragraph/block and produce bounding boxes."""
-    data = pytesseract.image_to_data(image, lang="eng", output_type=pytesseract.Output.DICT)
-    groups = {}
-    for i, raw in enumerate(data["text"]):
-        word = (raw or "").strip()
-        try:
-            conf = float(data["conf"][i])
-        except (ValueError, TypeError):
-            continue
-        if not word or conf < 25:
-            continue
-        key = (data["block_num"][i], data["par_num"][i], data["line_num"][i])
-        groups.setdefault(key, []).append((word, int(data["left"][i]), int(data["top"][i]), int(data["width"][i]), int(data["height"][i]), conf))
-    regions = []
-    for words in groups.values():
-        text = " ".join(w[0] for w in words)
-        x1 = min(w[1] for w in words)
-        y1 = min(w[2] for w in words)
-        x2 = max(w[1] + w[3] for w in words)
-        y2 = max(w[2] + w[4] for w in words)
-        regions.append(([x1, y1, x2 - x1, y2 - y1], text, sum(w[5] for w in words) / len(words) / 100))
-    return sorted(regions, key=lambda r: (r[0][1], r[0][0]))
+class RenderResponse(TranslateResponse):
+    overlay_data_url: str
+    applied_regions: int
+    skipped: list[dict]
+    render_mode: str = "flat-bubble-overlay"
+
+
+def extract_regions(image: Image.Image):
+    return [(list(r.bbox), r.source_text, r.confidence) for r in extract_grouped_regions(image)]
 
 
 async def translate_texts(texts: list[str]) -> list[str]:
@@ -65,58 +53,80 @@ async def translate_texts(texts: list[str]) -> list[str]:
         raise HTTPException(status_code=503, detail="OPENAI_API_KEY not configured")
     if not texts:
         return []
-    prompt = "Translate these English manga dialogue lines into natural Thai. Return ONLY a JSON array of strings in the same order, one translation per input. Preserve names and punctuation.\n" + __import__("json").dumps(texts, ensure_ascii=False)
+    import json
+    prompt = ("Translate each English manga dialogue into fluent, concise, natural Thai, "
+              "preserving speaker names and line order. Return a JSON object with a "
+              "translations array of Thai strings only, one item per input. Input:\n"
+              + json.dumps(texts, ensure_ascii=False))
     try:
         async with httpx.AsyncClient(timeout=40) as client:
             response = await client.post(
                 "https://api.openai.com/v1/chat/completions",
-                headers={"Authorization": "Bearer " + key},
-                json={"model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"), "temperature": 0, "response_format": {"type": "json_object"}, "messages": [
-                    {"role": "system", "content": "Return a JSON object with a translations array containing Thai strings only."},
-                    {"role": "user", "content": prompt},
-                ]},
+                headers={"Authorization": "Bearer "+key},
+                json={"model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"), "temperature": 0,
+                      "response_format": {"type": "json_object"},
+                      "messages": [{"role": "system", "content": "Return strictly JSON with translations array."},
+                                   {"role": "user", "content": prompt}]},
             )
             response.raise_for_status()
-            payload = response.json()["choices"][0]["message"]["content"]
-            parsed = __import__("json").loads(payload)
-            result = parsed["translations"]
-            if len(result) != len(texts) or any(not isinstance(t, str) for t in result):
-                raise ValueError("Translation count mismatch")
-            return result
-    except (httpx.HTTPError, KeyError, ValueError, TypeError) as exc:
-        raise HTTPException(status_code=502, detail="Translation provider failed") from exc
+            values = json.loads(response.json()["choices"][0]["message"]["content"])["translations"]
+            if not isinstance(values,list) or len(values)!=len(texts) or not all(isinstance(v,str) for v in values):
+                raise ValueError("Translation response has wrong shape")
+            return values
+    except (httpx.HTTPError,ValueError,KeyError,TypeError) as exc:
+        raise HTTPException(status_code=502,detail="Translation provider failed") from exc
+
+
+async def _decode_image(file: UploadFile) -> Image.Image:
+    if file.content_type not in {"image/png","image/jpeg","image/webp"}:
+        raise HTTPException(status_code=415,detail="Unsupported MIME type")
+    raw = await file.read(MAX_IMAGE_BYTES+1)
+    if len(raw)>MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=413,detail="Image exceeds size limit")
+    try:
+        with Image.open(io.BytesIO(raw)) as source:
+            if source.width*source.height>MAX_PIXELS:
+                raise HTTPException(status_code=413,detail="Image exceeds pixel limit")
+            if source.format not in {"PNG","JPEG","WEBP"}:
+                raise HTTPException(status_code=415,detail="Unsupported image format")
+            return ImageOps.exif_transpose(source).convert("RGB")
+    except (UnidentifiedImageError,OSError,Image.DecompressionBombError) as exc:
+        raise HTTPException(status_code=400,detail="Invalid image") from exc
+
+
+async def _process(file: UploadFile):
+    image = await _decode_image(file)
+    try:
+        source = extract_regions(image)
+    except Exception as exc:
+        raise HTTPException(status_code=503,detail="OCR unavailable") from exc
+    translated = await translate_texts([txt for _,txt,_ in source])
+    regions = [Region(bbox=box,source_text=txt,translated_text=translation,confidence=confidence)
+               for (box,txt,confidence),translation in zip(source,translated)]
+    return image,source,translated,regions
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "provider": os.getenv("TRANSLATOR_PROVIDER", "mock")}
+    return {"status":"ok","provider":os.getenv("TRANSLATOR_PROVIDER","mock")}
 
 
-@app.post("/api/v1/translate", response_model=TranslateResponse)
+@app.post("/api/v1/translate",response_model=TranslateResponse)
 async def translate(file: UploadFile = File(...)):
-    if file.content_type not in {"image/png", "image/jpeg", "image/webp"}:
-        raise HTTPException(status_code=415, detail="Unsupported image MIME type")
-    raw = await file.read(MAX_IMAGE_BYTES + 1)
-    if len(raw) > MAX_IMAGE_BYTES:
-        raise HTTPException(status_code=413, detail="Image too large")
+    image,_,_,regions = await _process(file)
+    return TranslateResponse(image_width=image.width,image_height=image.height,regions=regions,
+                             provider=os.getenv("TRANSLATOR_PROVIDER","mock"))
+
+
+@app.post("/api/v1/translate-rendered",response_model=RenderResponse)
+async def translate_rendered(file: UploadFile = File(...)):
+    image,source,translations,regions = await _process(file)
     try:
-        with Image.open(io.BytesIO(raw)) as source:
-            if source.width * source.height > MAX_PIXELS:
-                raise HTTPException(status_code=413, detail="Too many pixels")
-            if source.format not in {"PNG", "JPEG", "WEBP"}:
-                raise HTTPException(status_code=415, detail="Unsupported image format")
-            image = ImageOps.exif_transpose(source).convert("RGB")
-    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
-        raise HTTPException(status_code=400, detail="Invalid image") from exc
-    try:
-        regions = extract_regions(image)
-    except (pytesseract.TesseractNotFoundError, pytesseract.TesseractError) as exc:
-        raise HTTPException(status_code=503, detail="OCR unavailable") from exc
-    translated = await translate_texts([text for _, text, _ in regions])
-    return TranslateResponse(
-        image_width=image.width,
-        image_height=image.height,
-        regions=[Region(bbox=box, source_text=txt, translated_text=translation, confidence=confidence)
-                 for (box, txt, confidence), translation in zip(regions, translated)],
-        provider=os.getenv("TRANSLATOR_PROVIDER", "mock"),
-    )
+        overlay,applied,skipped = render_translations(
+            image,[TextRegion(tuple(box),txt,confidence) for box,txt,confidence in source],translations)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503,detail=str(exc)) from exc
+    return RenderResponse(image_width=image.width,image_height=image.height,regions=regions,
+                          provider=os.getenv("TRANSLATOR_PROVIDER","mock"),
+                          overlay_data_url=overlay_data_url(overlay),
+                          applied_regions=applied,skipped=skipped)

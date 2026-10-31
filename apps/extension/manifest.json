@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Manga Translator POC",
-  "version": "0.1.1",
-  "description": "Translate English manga bubbles to Thai on demand.",
+  "version": "0.2.0",
+  "description": "Replace English manga bubble lettering with Thai on flat backgrounds.",
   "permissions": ["activeTab", "scripting"],
   "host_permissions": [
     "http://127.0.0.1:8000/*",

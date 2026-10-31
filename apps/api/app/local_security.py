@@ -157,10 +157,14 @@ def check_extension_origin(request: Request):
         raise HTTPException(status_code=403, detail="Cross-site request blocked")
 
 
-def require_extension(request: Request):
+def require_extension_identity(request: Request):
     check_extension_origin(request)
     if not security.verify_capability(request.headers.get("authorization")):
         raise HTTPException(status_code=401, detail="Pair the extension before translating")
+
+
+def require_extension(request: Request):
+    require_extension_identity(request)
     with security.lock:
         now = time.monotonic()
         security.requests = [t for t in security.requests if now - t < 60]

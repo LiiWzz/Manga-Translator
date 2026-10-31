@@ -7,6 +7,7 @@ is untrusted and strictly validated before it reaches the side panel.
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import json
 import re
@@ -24,6 +25,9 @@ MAX_IMAGE_DATA_URL_BYTES = 8 * 1024 * 1024
 MAX_DIALOGUES = 40
 MAX_SOURCE_LENGTH = 700
 MAX_TRANSLATION_LENGTH = 1000
+READER_PIPELINE_VERSION = "vision-reader-1"
+# No glossary is applied yet. Future glossary support must change this identity.
+GLOSSARY_REVISION = "none"
 
 VISION_INSTRUCTIONS = (
     "You are a manga dialogue transcriber and English-to-Thai translator. "
@@ -47,6 +51,16 @@ VISION_INSTRUCTIONS = (
     "complete, legible English dialogue exists. No bounding boxes or confidence "
     "scores: do not fabricate geometric or numeric measurements."
 )
+
+
+def cache_profile() -> str:
+    """Opaque identity of translation inputs; never disclose credentials/account data."""
+    saved = auth.store.load() or {}
+    inputs = [READER_PIPELINE_VERSION, GLOSSARY_REVISION, VISION_INSTRUCTIONS,
+              saved.get("selected_model"), saved.get("issuer"), saved.get("subject"),
+              MAX_IMAGE_SIDE, IMAGE_OVERLAP, MAX_IMAGE_TILES, MAX_IMAGE_DATA_URL_BYTES,
+              MAX_DIALOGUES, MAX_SOURCE_LENGTH, MAX_TRANSLATION_LENGTH]
+    return hashlib.sha256(json.dumps(inputs, ensure_ascii=False).encode()).hexdigest()
 
 
 def prepare_image(image: Image.Image) -> str:

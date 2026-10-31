@@ -9,12 +9,13 @@ import httpx
 from fastapi import FastAPI, File, HTTPException, UploadFile, Request, Depends, Form
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel
+from fastapi.responses import JSONResponse
 
 from .bubble_renderer import TextRegion, overlay_data_url, render_translations
 from .ocr_grouping import extract_grouped_regions, analyze_regions, diagnostic_packet
 from .oauth_routes import router as oauth_router
 from .provider_adapter import translate_chatgpt
-from .local_security import require_extension
+from .local_security import require_extension, require_extension_identity
 
 app = FastAPI(title="Manga Translator POC v0.3")
 logger = logging.getLogger(__name__)
@@ -146,21 +147,33 @@ async def translate_rendered(file: UploadFile = File(...), debug: bool = False, 
                           applied_regions=applied,skipped=skipped,diagnostics=diagnostic)
 
 
+@app.get("/api/v1/reader/profile")
+def reader_profile(gate=Depends(require_extension_identity)):
+    from .reader_vision import cache_profile
+    return JSONResponse({"fingerprint": cache_profile()}, headers={"Cache-Control": "no-store"})
+
+
 @app.post("/api/v1/reader/translate")
-async def reader_translate(file: UploadFile = File(...), context: str = Form(""), gate=Depends(require_extension)):
+async def reader_translate(file: UploadFile = File(...), context: str = Form(""),
+                           profile: str = Form(""), gate=Depends(require_extension)):
     """Vision-first reading. No synthetic boxes or edits to the original image."""
     if len(context) > 1500:
         raise HTTPException(status_code=422, detail="Context exceeds 1500 characters")
     image = await _decode_image(file)
-    from .reader_vision import translate_image
+    from .reader_vision import translate_image, cache_profile
     from .siwc import AuthError
+    fingerprint = cache_profile()
+    if profile and profile != fingerprint:
+        raise HTTPException(status_code=409, detail="Reader settings changed; scan again")
     try:
         dialogue = await translate_image(image, context)
     except AuthError as exc:
         # AuthError messages are safe by contract; omit image, dialogue and credentials.
         logger.warning("Reader vision rejected image (%dx%d): %s", image.width, image.height, exc)
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if cache_profile() != fingerprint:
+        raise HTTPException(status_code=409, detail="Reader settings changed during translation; scan again")
     return {"image_width": image.width, "image_height": image.height,
             "regions": dialogue,
             "provider": os.getenv("TRANSLATOR_PROVIDER", "chatgpt_oauth"),
-            "reader_mode": "vision-first"}
+            "reader_mode": "vision-first", "profile": fingerprint}

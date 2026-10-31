@@ -16,12 +16,14 @@ overlapping crops in one inference request to preserve readable text.
 
 The user has accepted the latest Reader fix after trying it. This is evidence for
 that reading workflow, not completion of a broad quality or security benchmark.
-Cache and edits currently last only for the current page session. The Reader
-reliability feature branch adds per-image errors and retries, isolates context by
+The Reader reliability branch adds per-image errors and retries, isolates context by
 tab/page URL and discards obsolete work after reset or navigation. Automated
 regressions cover these behaviors. On 2026-10-28 the user reported completing
 the Chrome Side Panel check; this is recorded as user-reported manual acceptance
-for PR #7. Persistent cache and edits remain the next implementation milestone.
+for PR #7. The persistent-cache feature branch now implements milestone 2 with
+local result/correction storage, exact-input revalidation, expiry/size bounds and
+clear-data controls. Its automated checks pass; new manual Chrome acceptance is
+pending. See [persistent-cache behavior and verification](READER_CACHE.md).
 See [Reader behavior and limits](READER_V04.md).
 
 ## Next milestones

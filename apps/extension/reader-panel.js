@@ -1,13 +1,15 @@
-/* Non-destructive Side Panel: results and edits stay within this page session. */
+/* Non-destructive Reader with bounded local persistence owned by the worker. */
 const status = document.getElementById("status");
 const items = document.getElementById("items");
 const scanButton = document.getElementById("scan");
 const grantButton = document.getElementById("grant");
+const clearButton = document.getElementById("clear-cache");
 const imagesByUrl = new Map();
 let generation = 0;
 let source = null;
 let activeRun = null;
 let pendingPermission = null;
+let clearing = false;
 
 function show(message) { status.textContent = message; }
 function element(tag, className, value) {
@@ -38,7 +40,7 @@ function reset(message) {
   imagesByUrl.clear();
   clearPendingPermission();
   items.replaceChildren();
-  scanButton.disabled = false;
+  scanButton.disabled = clearing;
   show(message);
 }
 function current(run) { return activeRun === run && run.generation === generation; }
@@ -67,17 +69,36 @@ function renderDialogue(record, r, index) {
   const controls = element("div", "tools");
   const edit = element("button", "", "แก้คำแปล");
   edit.addEventListener("click", () => {
+    if (activeRun) { show("รอแปลภาพในคิวให้เสร็จก่อนแก้คำแปล"); return; }
     if (card.querySelector("textarea")) return;
     const input = document.createElement("textarea");
     input.value = translated.textContent;
     const save = element("button", "", "บันทึก");
-    save.addEventListener("click", () => {
-      translated.textContent = input.value;
-      r.translated_text = input.value;
-      input.remove();
-      save.remove();
+    const cancel = element("button", "", "ยกเลิก");
+    cancel.addEventListener("click", () => { input.remove(); save.remove(); cancel.remove(); });
+    save.addEventListener("click", async () => {
+      const epoch = generation, key = record.cacheKey, text = input.value;
+      if (!key || !text.trim() || text.length > 1000) {
+        show("ยังบันทึกไม่ได้: ต้องมีคำแปลที่บันทึกไว้ และข้อความไม่เกิน 1000 ตัวอักษร");
+        return;
+      }
+      save.disabled = true;
+      cancel.disabled = true;
+      try {
+        const reply = await chrome.runtime.sendMessage({type: "MANGA_READER_SAVE_EDIT", key, index, text, epoch: record.cacheEpoch});
+        if (epoch !== generation || imagesByUrl.get(record.url) !== record || record.cacheKey !== key) return;
+        if (!reply?.ok) throw new Error(reply?.error || "บันทึกคำแก้ไขไม่สำเร็จ กรุณาลองอีกครั้ง");
+        translated.textContent = text;
+        r.translated_text = text;
+        input.remove();
+        save.remove();
+        cancel.remove();
+        show("บันทึกคำแก้ไขในเครื่องแล้ว");
+      } catch (error) {
+        if (epoch === generation) show(error.message || String(error));
+      } finally { save.disabled = false; cancel.disabled = false; }
     });
-    card.append(input, save);
+    card.append(input, save, cancel);
     input.focus();
   });
   controls.append(edit);
@@ -87,6 +108,8 @@ function renderDialogue(record, r, index) {
 
 function renderImage(record) {
   record.card.replaceChildren(element("small", "", "ภาพ " + (record.index + 1)));
+  if (record.cacheHit) record.card.append(element("small", "", " · ใช้คำแปลที่บันทึกไว้"));
+  if (record.notice) record.card.append(element("div", "image-status", record.notice));
   if (record.state === "success") {
     record.regions.forEach((r, index) => renderDialogue(record, r, index));
     const locate = element("button", "", "ไปยังภาพ");
@@ -156,12 +179,17 @@ async function translateRecord(run, record) {
   } else {
     record.regions = regions;
     record.state = regions.length ? "success" : "empty";
+    record.cacheKey = reply.data.cache_key;
+    record.cacheEpoch = reply.data.cache_epoch;
+    record.cacheHit = reply.data.cache_hit;
+    record.notice = reply.data.cache_warning || "";
   }
   renderImage(record);
 }
 
 async function scan(retryRecord = null) {
-  if (activeRun) return;
+  if (activeRun || clearing) return;
+  if (items.querySelector("textarea")) { show("บันทึกหรือยกเลิกคำแก้ไขก่อนแปลภาพถัดไป"); return; }
   // Capture the generation before the first await, including tab/permission setup.
   const run = {generation};
   activeRun = run;
@@ -205,7 +233,14 @@ async function scan(retryRecord = null) {
       }
       queue = [];
       for (const image of images.slice(0, 3)) {
-        if (imagesByUrl.has(image.url)) continue;
+        const existing = imagesByUrl.get(image.url);
+        if (existing) {
+          if (existing.state !== "error" && !queue.includes(existing)) {
+            existing.index = image.index;
+            queue.push(existing); // Worker revalidates bytes/profile/context before reuse.
+          }
+          continue;
+        }
         const record = {...image, state: "queued", regions: [], error: "", card: element("section", "image")};
         imagesByUrl.set(image.url, record);
         items.append(record.card);
@@ -268,4 +303,26 @@ chrome.tabs.onRemoved.addListener(tabId => {
   if (source?.id === tabId) reset("ปิดแท็บต้นฉบับแล้ว กรุณาเปิดหน้ามังงะ");
 });
 document.getElementById("reset").addEventListener("click", () => reset("เริ่มใหม่แล้ว"));
+clearButton.addEventListener("click", async () => {
+  if (clearing) return;
+  clearing = true;
+  clearButton.disabled = true;
+  reset("กำลังลบคำแปลและคำแก้ไขที่บันทึกไว้…");
+  try {
+    const reply = await chrome.runtime.sendMessage({type: "MANGA_READER_CLEAR_CACHE"});
+    if (!reply?.ok) throw new Error(reply?.error || "ลบข้อมูลไม่สำเร็จ กรุณาลองอีกครั้ง");
+    show("ลบคำแปลและคำแก้ไขที่บันทึกไว้ทั้งหมดแล้ว");
+  } catch (error) { show(error.message || String(error)); }
+  finally {
+    clearing = false;
+    clearButton.disabled = false;
+    scanButton.disabled = Boolean(activeRun);
+  }
+});
+chrome.storage.onChanged.addListener((changes, area) => {
+  const change = changes.mangaReaderCacheV1;
+  if (area === "local" && change?.oldValue?.epoch && change.oldValue.epoch !== change.newValue?.epoch) {
+    reset("ข้อมูลที่บันทึกไว้ถูกลบแล้ว กดแปลภาพที่เห็นเพื่อเริ่มใหม่");
+  }
+});
 document.getElementById("settings").addEventListener("click", () => chrome.runtime.openOptionsPage());

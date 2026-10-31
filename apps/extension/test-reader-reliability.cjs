@@ -39,7 +39,7 @@ class Element {
 }
 function descendants(el) { return el.children.flatMap(child => [child, ...descendants(child)]); }
 function harness() {
-  const elements = Object.fromEntries(["status", "items", "scan", "grant", "reset", "settings"].map(id => [id, new Element()]));
+  const elements = Object.fromEntries(["status", "items", "scan", "grant", "reset", "settings", "clear-cache"].map(id => [id, new Element()]));
   const state = {
     tab: {id: 1, windowId: 1, url: "https://reader.example/chapter/1"},
     images: [{index: 0, url: "https://reader.example/1.png"}],
@@ -59,8 +59,13 @@ function harness() {
     },
     permissions: {contains: () => state.permission(), request: () => state.requestPermission()},
     scripting: {executeScript: () => state.inject()},
+    storage: {onChanged: event()},
     runtime: {
-      sendMessage: message => { state.calls.push(message); return state.translate(message); },
+      sendMessage: message => {
+        if (message.type !== "MANGA_READER_TRANSLATE") return state.mutate ? state.mutate(message) : Promise.resolve({ok: true});
+        state.calls.push(message);
+        return state.translate(message);
+      },
       openOptionsPage() {}
     }
   };
@@ -76,11 +81,11 @@ function harness() {
   };
 }
 function reply(source = "HELLO", translated = "สวัสดี") {
-  return {ok: true, data: {regions: [{source_text: source, translated_text: translated}]}};
+  return {ok: true, data: {cache_key: "a".repeat(64), regions: [{source_text: source, translated_text: translated}]}};
 }
 async function settle() { for (let i = 0; i < 8; i++) await new Promise(setImmediate); }
 
-test("failed image keeps its error and retries only on explicit request", async () => {
+test("failed image keeps its error and retries only on explicit request while success is revalidated", async () => {
   const h = harness();
   h.state.images.push({index: 1, url: "https://reader.example/2.png"});
   h.state.translate = async message => message.url.endsWith("1.png") ? reply() : {ok: false, error: "Image HTTP 503"};
@@ -88,11 +93,11 @@ test("failed image keeps its error and retries only on explicit request", async 
   assert.match(h.text(), /Image HTTP 503/);
   assert.match(h.text(), /สวัสดี/);
   await h.scan();
-  assert.equal(h.state.calls.length, 2, "scan must not resubmit success or failure");
+  assert.equal(h.state.calls.length, 3, "scan revalidates success but must not retry failure");
   h.state.translate = async () => reply("BYE", "ลาก่อน");
   await h.retry();
-  assert.equal(h.state.calls.length, 3);
-  assert.match(h.state.calls[2].url, /2.png$/);
+  assert.equal(h.state.calls.length, 4);
+  assert.match(h.state.calls[3].url, /2.png$/);
   assert.doesNotMatch(h.text(), /Image HTTP 503/);
   assert.match(h.text(), /ลาก่อน/);
 });
@@ -116,7 +121,8 @@ test("empty images are remembered and have a visible status", async () => {
   await h.scan();
   assert.match(h.text(), /ไม่พบ/);
   await h.scan();
-  assert.equal(h.state.calls.length, 1);
+  assert.equal(h.state.calls.length, 2, "empty images are revalidated before persistent reuse");
+  assert.equal(h.elements.items.children.length, 1);
 });
 
 test("malformed successful responses become retryable image errors", async () => {
@@ -141,7 +147,7 @@ test("reset discards a late reply and stops the remaining queue", async () => {
   assert.match(h.elements.status.textContent, /เริ่มใหม่/);
   h.state.translate = async () => reply();
   await h.scan();
-  assert.equal(h.state.calls.length, 3, "discarded response must not enter cache");
+  assert.equal(h.state.calls.length, 3, "new scan revalidates both visible images");
 });
 
 test("an older run cannot unlock the scan button while a new run is pending", async () => {
@@ -324,39 +330,56 @@ test("content discovery and locate reject a stale chapter URL", () => {
   assert.deepEqual(h.scrolled, []);
 });
 
-function workerHarness() {
+function workerHarness({storage = {}} = {}) {
   let listener;
   const state = {
     tab: {id: 1, url: "https://reader.example/chapter/1", status: "complete"},
     active: true, fetched: [], beforeBlob: () => {},
+    profile: "1".repeat(64), imageBytes: "generated-test-bytes", storage,
     message: {type: "MANGA_READER_TRANSLATE", tabId: 1, pageUrl: "https://reader.example/chapter/1", url: "https://reader.example/1.png", context: "prior dialogue"}
   };
-  vm.runInNewContext(fs.readFileSync("apps/extension/background.js", "utf8"), {
-    URL, FormData, console,
+  const context = vm.createContext({
+    URL, FormData, console, crypto, TextEncoder, Uint8Array,
+    importScripts: file => vm.runInContext(fs.readFileSync("apps/extension/" + file, "utf8"), context),
     chrome: {
       sidePanel: {setPanelBehavior: async () => {}},
       runtime: {id: "test-extension", onMessage: {addListener(fn) { listener = fn; }}},
-      storage: {local: {get: async () => ({mangaCapability: "test-only-local-capability"})}},
+      storage: {local: {
+        setAccessLevel: async options => { state.accessLevel = options.accessLevel; },
+        get: async keys => {
+          const all = {mangaCapability: "test-only-local-capability", ...state.storage};
+          return structuredClone(Object.fromEntries((Array.isArray(keys) ? keys : [keys]).map(key => [key, all[key]])));
+        },
+        set: async data => {
+          if (state.failStorage) throw new Error("Quota exceeded");
+          Object.assign(state.storage, structuredClone(data));
+        }
+      }},
       tabs: {get: async () => ({...state.tab}), query: async () => state.active ? [{...state.tab}] : []}
     },
-    fetch: async url => {
+    fetch: async (url, options) => {
       state.fetched.push(url);
+      if (url.startsWith("https:")) assert.equal(options.cache, "no-store");
       if (url.startsWith("https:")) return {
         ok: true, headers: new Headers({"content-type": "image/png"}),
-        blob: async () => { state.beforeBlob(); return new Blob(["generated-test-bytes"], {type: "image/png"}); }
+        blob: async () => { await state.beforeBlob(); return new Blob([state.imageBytes], {type: "image/png"}); }
       };
-      return {ok: true, json: async () => ({regions: []})};
+      if (url.endsWith("/profile")) return state.profileResponse || {ok: true, json: async () => ({fingerprint: state.profile})};
+      if (state.inference) return state.inference();
+      return {ok: true, json: async () => ({regions: [{source_text: "HELLO", translated_text: "สวัสดี"}], profile: state.profile})};
     }
   });
-  state.send = () => new Promise(resolve => listener(state.message, {id: "test-extension"}, resolve));
+  vm.runInContext(fs.readFileSync("apps/extension/background.js", "utf8"), context);
+  state.send = (message = state.message, sender = {id: "test-extension", url: "chrome-extension://test-extension/reader-panel.html"}) => new Promise(resolve => listener(message, sender, resolve));
   return state;
 }
 
 test("worker submits a reader request only for the active source page", async () => {
   const h = workerHarness();
   assert.equal((await h.send()).ok, true);
-  assert.equal(h.fetched.length, 2);
-  assert.match(h.fetched[1], /reader\/translate$/);
+  assert.equal(h.fetched.length, 3);
+  assert.match(h.fetched[2], /reader\/translate$/);
+  assert.equal(h.accessLevel, "TRUSTED_CONTEXTS");
 });
 
 for (const change of ["url", "inactive", "loading", "missing-page-url"]) {
@@ -376,4 +399,134 @@ test("worker does not submit inference after navigation during image fetch", asy
   h.beforeBlob = () => { h.tab.url += "/next"; };
   assert.equal((await h.send()).ok, false);
   assert.equal(h.fetched.length, 1, "old context must not reach the API");
+});
+
+test("worker reuses persisted translations and corrections after service-worker restart", async () => {
+  const first = workerHarness();
+  const initial = await first.send();
+  assert.equal(initial.data.cache_hit, false);
+  assert.equal((await first.send({type: "MANGA_READER_SAVE_EDIT", key: initial.data.cache_key, epoch: initial.data.cache_epoch, index: 0, text: "แก้ถาวร"})).ok, true);
+  const reopened = workerHarness({storage: first.storage});
+  const reused = await reopened.send();
+  assert.equal(reused.data.cache_hit, true);
+  assert.equal(reused.data.regions[0].translated_text, "แก้ถาวร");
+  assert.equal(reopened.fetched.filter(url => url.endsWith("/translate")).length, 0);
+  assert.equal(reopened.fetched.filter(url => url.startsWith("https:")).length, 1, "image is revalidated");
+});
+
+for (const change of ["image", "profile", "context", "chapter"]) {
+  test(`worker invalidates saved data when ${change} changes`, async () => {
+    const h = workerHarness(), original = await h.send();
+    if (change === "image") h.imageBytes += "changed";
+    if (change === "profile") h.profile = "2".repeat(64);
+    if (change === "context") h.message.context = "changed previous dialogue";
+    if (change === "chapter") { h.message.pageUrl += "/next"; h.tab.url = h.message.pageUrl; }
+    const updated = await h.send();
+    assert.equal(updated.ok, true);
+    assert.equal(updated.data.cache_hit, false);
+    assert.notEqual(updated.data.cache_key, original.data.cache_key);
+    assert.equal(h.fetched.filter(url => url.endsWith("/translate")).length, 2);
+  });
+}
+
+test("worker shows a persistence warning when storage fails without losing translation", async () => {
+  const h = workerHarness();
+  h.failStorage = true;
+  const response = await h.send();
+  assert.equal(response.ok, true);
+  assert.equal(response.data.cache_key, null);
+  assert(response.data.cache_warning);
+  assert.equal(response.data.regions[0].translated_text, "สวัสดี");
+});
+
+test("content scripts cannot read, edit or clear persistent Reader results", async () => {
+  const h = workerHarness(), sender = {id: "test-extension", url: h.tab.url, tab: h.tab};
+  for (const message of [h.message, {type: "MANGA_READER_CLEAR_CACHE"},
+    {type: "MANGA_READER_SAVE_EDIT", key: "a".repeat(64), index: 0, text: "แก้"}]) {
+    assert.equal((await h.send(message, sender)).ok, false);
+  }
+  assert.equal(h.fetched.length, 0);
+});
+
+test("reopening the panel restores a correction without another inference", async () => {
+  const worker = workerHarness(), first = harness();
+  first.state.translate = message => worker.send(message);
+  first.state.mutate = message => worker.send(message);
+  await first.scan();
+  await descendants(first.elements.items).find(el => el.tagName === "button" && el.textContent === "แก้คำแปล").click();
+  first.elements.items.querySelector("textarea").value = "คำแก้ที่อยู่ข้ามครั้ง";
+  await descendants(first.elements.items).find(el => el.tagName === "button" && el.textContent === "บันทึก").click();
+  const restarted = workerHarness({storage: worker.storage}), second = harness();
+  second.state.translate = message => restarted.send(message);
+  await second.scan();
+  assert.match(second.text(), /คำแก้ที่อยู่ข้ามครั้ง/);
+  assert.match(second.text(), /ใช้คำแปลที่บันทึกไว้/);
+  assert.equal(restarted.fetched.filter(url => url.endsWith("/translate")).length, 0);
+});
+
+test("a failed durable edit keeps the editor open and does not display it as saved", async () => {
+  const h = harness();
+  await h.scan();
+  await descendants(h.elements.items).find(el => el.tagName === "button" && el.textContent === "แก้คำแปล").click();
+  h.elements.items.querySelector("textarea").value = "ยังไม่ได้บันทึก";
+  h.state.mutate = async () => ({ok: false, error: "Storage full"});
+  await descendants(h.elements.items).find(el => el.tagName === "button" && el.textContent === "บันทึก").click();
+  assert(h.elements.items.querySelector("textarea"));
+  assert.match(h.text(), /สวัสดี/);
+  assert.match(h.elements.status.textContent, /Storage full/);
+});
+
+test("clear during inference discards late results and prevents cache resurrection", async () => {
+  const worker = workerHarness(), h = harness(), pending = deferred();
+  worker.inference = () => pending.promise;
+  h.state.translate = message => worker.send(message);
+  h.state.mutate = message => worker.send(message);
+  const run = h.scan();
+  await settle();
+  assert.equal(worker.fetched.filter(url => url.endsWith("/translate")).length, 1);
+  await h.elements["clear-cache"].click();
+  pending.resolve({ok: true, json: async () => ({profile: worker.profile, regions: reply().data.regions})});
+  await run;
+  assert.equal(h.text(), "");
+  assert.deepEqual(worker.storage.mangaReaderCacheV1.entries, []);
+});
+
+test("clearing in another panel invalidates this panel's pending result", async () => {
+  const h = harness(), pending = deferred();
+  h.state.translate = () => pending.promise;
+  const run = h.scan();
+  await settle();
+  await h.chrome.storage.onChanged.emit({mangaReaderCacheV1: {oldValue: {epoch: "old"}, newValue: {epoch: "new"}}}, "local");
+  pending.resolve(reply());
+  await run;
+  assert.equal(h.text(), "");
+});
+
+test("scan preserves an unsaved editor until the reader saves or cancels", async () => {
+  const h = harness();
+  await h.scan();
+  await descendants(h.elements.items).find(el => el.tagName === "button" && el.textContent === "แก้คำแปล").click();
+  h.elements.items.querySelector("textarea").value = "ยังแก้ไม่เสร็จ";
+  await h.scan();
+  assert.equal(h.state.calls.length, 1);
+  assert.equal(h.elements.items.querySelector("textarea").value, "ยังแก้ไม่เสร็จ");
+  await descendants(h.elements.items).find(el => el.tagName === "button" && el.textContent === "ยกเลิก").click();
+  await h.scan();
+  assert.equal(h.state.calls.length, 2);
+});
+
+test("worker persists empty results without repeated inference", async () => {
+  const worker = workerHarness();
+  worker.inference = async () => ({ok: true, json: async () => ({profile: worker.profile, regions: []})});
+  assert.equal((await worker.send()).data.regions.length, 0);
+  assert.equal((await worker.send()).data.cache_hit, true);
+  assert.equal(worker.fetched.filter(url => url.endsWith("/translate")).length, 1);
+});
+
+test("a revoked pairing cannot reuse cached dialogue through a failed profile check", async () => {
+  const worker = workerHarness();
+  assert.equal((await worker.send()).ok, true);
+  worker.profileResponse = {ok: false, status: 401};
+  assert.equal((await worker.send()).ok, false);
+  assert.equal(worker.fetched.filter(url => url.endsWith("/translate")).length, 1);
 });

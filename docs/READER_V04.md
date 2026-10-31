@@ -8,15 +8,15 @@ The original image overlay corrupts some dialogue and artwork, especially styliz
 1. Connect and pair the extension via Options, as before.
 2. Open a manga webpage and click the extension toolbar button to open the Reader panel. Chrome opens it directly via `sidePanel.setPanelBehavior({openPanelOnActionClick: true})`, so the toolbar click is not delayed by any content-script injection. Clicking **แปลภาพที่เห็น** within the panel injects the read-only scanner. Reload the unpacked extension via `chrome://extensions` after pulling changes. If it still does not open, inspect the extension **Service worker** console and Chrome version/support for the Side Panel API.
 3. Click **แปลภาพที่เห็น**. If prompted, click **อนุญาตเว็บไซต์** and approve Chrome's per-site access; then the extension discovers up to three loaded viewport images and sends them serially to the authenticated local endpoint.
-4. Backend sends the image to the selected vision-capable model and validates complete source/Thai dialogue pairs. Tall strips are sent as overlapping crops in one request. Responses have no verified coordinates (`bbox` and `confidence` are `null`). Each image has a visible queued/loading/success/empty/error state. Errors stay on that image with **ลองใหม่**; retry sends only that failed image. The panel displays both texts; **แก้คำแปล** edits locally, **ไปยังภาพ** finds the source by image URL even if lazy loading has shifted its document index.
-5. Scroll the page and click **แปลภาพที่เห็น** again. In-panel session results avoid sending the same image URL twice, including empty results. Failed images require explicit retry. **เริ่มใหม่** clears results and edits, stops the remaining queue and ignores late replies. Switching source tabs, changing the page URL (including its fragment), reloading or closing the source tab clears the page session and its context; click translate again to start on the new page.
+4. The worker revalidates image bytes, translation settings and context, restoring matching saved results without inference. On a miss, the backend sends the image to the selected vision-capable model and validates complete source/Thai dialogue pairs. Tall strips use overlapping crops in one request. Responses have no verified coordinates (`bbox` and `confidence` are `null`). Each image has queued/loading/success/empty/error state; **ลองใหม่** retries a failed image only. **แก้คำแปล → บันทึก** persists corrections locally, and **ไปยังภาพ** locates the image by URL despite lazy-loaded DOM insertion.
+5. Scroll and click **แปลภาพที่เห็น** again. Successful/empty visible images are revalidated for persistent reuse; failed images require explicit retry. **เริ่มใหม่** clears the panel/context, stops the queue and ignores late replies while retaining saved results. **ลบคำแปลที่บันทึกไว้** deletes all durable Reader results/corrections while preserving pairing. Source tab/page changes clear only the page session. See [cache lifecycle and limits](READER_CACHE.md).
 
 ## Safety / limitations
 
 - No OpenAI tokens in extension storage; local pairing capability still required.
 - Reader endpoint enforces the existing 8 MiB, 24 MP image bounds and extension auth. Context is bounded to 1500 characters. Caller text is treated as quoted context.
 - Tall-strip input is limited to eight overlapping crops and 8 MiB of combined image data URLs. Inputs beyond those limits fail before inference. More crops can consume more model usage; no automatic retries are added.
-- Results and edits last only for the current tab/page session and are not persisted or used to retrain AI. URL changes conservatively start a new session. Chapter changes inside an SPA that keeps the same URL cannot be identified generically; press **เริ่มใหม่** in that case. Persistent cache/edits are the next milestone.
+- Results and saved corrections persist locally for at most seven days, subject to 4 MiB/200-entry bounds. They do not train AI. URL changes start a new page context. Same-URL SPA chapter transitions cannot be identified generically; press **เริ่มใหม่** in that case. Reuse still requires image access and the paired local gateway; it is not offline reading.
 - Reset/navigation stops new queued submissions and discards obsolete results; an inference already submitted may still complete and consume usage. This milestone does not cancel provider-side work.
 - Retry context includes successful earlier images from this page, bounded to 1500 characters, and excludes later images. A correction is included when building context for subsequent requests.
 - Three visible images are processed per click to keep latency and local gateway budgets bounded, not the whole chapter. Lazy-loaded pages require scrolling.
@@ -36,7 +36,7 @@ A real reader screenshot showed 79 individual OCR fragments (e.g. `my`, `A's`, `
 
 Matching punctuation-only balloons such as `......` and `?!` no longer invalidate otherwise valid Thai translations. Untranslated English, malformed output and invalid glyphs still fail validation. The reported 900 × 16000 strip previously shrank to 169 × 3000; it now uses six overlapping crops that preserve its 900-pixel width. The supplied image returned nine accepted entries, and the user accepted the fix. This does not establish quality across all manga or complete every manual acceptance check.
 
-The Reader reliability feature branch implements the first milestone with mocked behavioral regressions and user-reported manual Chrome acceptance on 2026-10-28. Next work remains persistent cache/edits, translation-quality evaluation, selected-region translation and controlled continuous reading, in that order. [The roadmap](POC_PLAN.md) also records the tentative v2 overlay investigation separately from the historical v0.2 prototype. Additional brainstorming is saved in [the idea backlog](READER_IDEAS.md) without changing that order.
+The Reader reliability baseline has mocked regressions and user-reported manual Chrome acceptance on 2026-10-28. The persistent-cache branch implements milestone 2; [its acceptance record](READER_CACHE.md) separates automated/preview evidence from pending real Chrome checks. Translation-quality evaluation, selected-region translation and controlled continuous reading follow in the existing order. [The roadmap](POC_PLAN.md) retains tentative v2 overlay as an investigation; [the idea backlog](READER_IDEAS.md) does not change that order.
 
 ## Reliability acceptance
 
@@ -63,7 +63,7 @@ acceptance record.
 Manual regression scenarios for future Reader changes:
 
 1. Translate multiple permitted images with one failure. Confirm the error stays
-   visible, scan does not resend existing results, and **ลองใหม่** retries only
+   visible, scan reuses valid saved results without another inference, and **ลองใหม่** retries only
    the failed image while keeping successful translations and edits.
 2. Reset during a request, then start again. Confirm the old response never
    repopulates the panel or unlocks the new run's controls.

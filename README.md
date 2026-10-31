@@ -15,8 +15,9 @@ requires an admin key. Thai connection status and a model dropdown replace raw
 JSON and model-slug copying. Real Chrome acceptance of this flow is pending.
 
 The [Reader model picker](docs/READER_MODELS.md) builds on that Settings branch.
-The current model is visible in the Reader header; open it to load account models
-and select a new one without leaving the panel. Selection saves immediately,
+Reader automatically loads the connected account's available models and shows
+the current model plus the number of choices in its header. Open it to select a
+new model without leaving the panel. Selection saves immediately,
 preserves displayed dialogue and unsaved edits, and applies to the next explicit
 translation. Controls prevent changing models during this panel's queue or
 starting translation during a model save. Real Chrome acceptance is pending.
@@ -32,8 +33,8 @@ starting translation during a model save. Real Chrome acceptance is pending.
 
 ```sh
 git fetch origin
-git switch feat/reader-model-picker
-git pull origin feat/reader-model-picker
+git switch feat/account-model-options
+git pull origin feat/account-model-options
 ```
 
 Check `.env`, or create it with `cp .env.example .env`. Make sure it contains:

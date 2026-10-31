@@ -47,7 +47,7 @@ function descendants(el) { return el.children.flatMap(child => [child, ...descen
 function harness({savedAppearance, modelAccess = false} = {}) {
   const elements = Object.fromEntries(["status", "items", "scan", "grant", "reset", "settings", "clear-cache",
     "empty-state", "reading-count", "source-label", "reader-menu", "show-source", "theme", "font-smaller", "font-larger",
-    "model-picker", "model-summary", "model-current", "model-select", "model-reload", "model-status", "model-settings"].map(id => [id, new Element()]));
+    "model-picker", "model-summary", "model-current", "model-count", "model-select", "model-reload", "model-status", "model-settings"].map(id => [id, new Element()]));
   const root = new Element("html");
   const state = {
     savedAppearance,
@@ -510,13 +510,14 @@ test("a failed durable edit keeps the editor open and does not display it as sav
   assert.match(h.elements.status.textContent, /Storage full/);
 });
 
-test("clear during inference discards late results and prevents cache resurrection", async () => {
-  const worker = workerHarness(), h = harness(), pending = deferred();
-  worker.inference = () => pending.promise;
+test("clear during inference discards late results and prevents cache resurrection", {timeout: 5000}, async () => {
+  const worker = workerHarness(), h = harness(), pending = deferred(), entered = deferred();
+  worker.inference = () => { entered.resolve(); return pending.promise; };
   h.state.translate = message => worker.send(message);
   h.state.mutate = message => worker.send(message);
   const run = h.scan();
-  await settle();
+  // Native image hashing can outlive any fixed count of event-loop turns.
+  await entered.promise;
   assert.equal(worker.fetched.filter(url => url.endsWith("/translate")).length, 1);
   await h.elements["clear-cache"].click();
   pending.resolve({ok: true, json: async () => ({profile: worker.profile, regions: reply().data.regions})});
@@ -621,11 +622,13 @@ test("reset from the menu closes it without deleting saved dialogue", async () =
   assert.equal(mutations, 0);
 });
 
-test("Reader shows its current model and loads account choices only on request", async () => {
+test("Reader automatically loads account choices without inference or an extra click", async () => {
   const h = harness({modelAccess: true}); await settle();
-  assert.equal(h.elements["model-current"].textContent, "vision-a");
-  assert.equal(h.state.modelCalls.length, 1);
+  assert.equal(h.elements["model-current"].textContent, "Vision A");
+  assert.equal(h.state.modelCalls.length, 2);
+  assert.equal(h.elements["model-count"].textContent, "2 รุ่น");
   await h.openModels();
+  assert.equal(h.state.modelCalls.length, 2, "opening uses the freshly loaded account catalog");
   assert.equal(h.elements["model-current"].textContent, "Vision A");
   assert.equal(h.elements["model-select"].disabled, false);
   assert.equal(h.elements["model-select"].value, "vision-a");
@@ -645,7 +648,7 @@ test("switching models preserves dialogue and unsaved edits without inference", 
   assert.match(h.text(), /สวัสดี/);
   assert.match(h.elements["model-status"].textContent, /บันทึกโมเดลแล้ว/);
   const reopened = harness({modelAccess: true}); reopened.state.model = h.state.model; await settle();
-  assert.equal(reopened.elements["model-current"].textContent, "vision-b");
+  assert.equal(reopened.elements["model-current"].textContent, "Vision B");
 });
 
 test("switching a model affects only the next user-initiated translation", async () => {
@@ -690,6 +693,7 @@ test("model catalog failure preserves the reading session and offers manual relo
   const h = harness({modelAccess: true}); await settle(); await h.scan();
   h.state.modelRequest = path => path.endsWith("/models") ? {ok: false, status: 502} : undefined;
   await h.openModels();
+  await h.elements["model-reload"].click();
   assert.match(h.elements["model-status"].textContent, /โหลดรายการไม่สำเร็จ/);
   assert.match(h.text(), /สวัสดี/);
   assert.equal(h.elements["model-select"].disabled, true);
@@ -782,4 +786,53 @@ test("a provider-side settings conflict stops the Reader before its next queued 
   assert.equal(worker.fetched.filter(url => url.endsWith("/translate")).length, 1);
   assert.match(h.text(), /ยังไม่ได้ส่งแปล/);
   assert.match(h.elements.status.textContent, /หยุดคิว/);
+});
+
+test("all eight account choices load automatically in provider order and remain selectable", async () => {
+  const h = harness({modelAccess: true});
+  h.state.catalog = Array.from({length: 8}, (_, i) => ({slug: i ? "generated-model-" + i : "vision-a", display_name: "Account choice " + i}));
+  await settle();
+  assert.equal(h.elements["model-select"].children.length, 8);
+  assert.equal(h.elements["model-count"].textContent, "8 รุ่น");
+  assert.equal(h.elements["model-count"].hidden, false);
+  assert.deepEqual(h.elements["model-select"].children.map(option => option.value), h.state.catalog.map(model => model.slug));
+  assert.match(h.elements["model-status"].textContent, /พบ 8 โมเดลจากบัญชีนี้/);
+  await h.chooseModel("generated-model-7");
+  assert.equal(h.state.model, "generated-model-7");
+  assert.equal(h.state.calls.length, 0);
+});
+
+test("switching account metadata replaces the choices and count without changing the selected model", async () => {
+  const h = harness({modelAccess: true}); await settle();
+  h.state.catalog = [{slug: "account-b-choice", display_name: "Account B choice"}];
+  h.state.model = "account-b-choice";
+  await h.state.windowEvents.focus.emit(); await settle();
+  assert.equal(h.elements["model-select"].children.length, 1);
+  assert.equal(h.elements["model-select"].value, "account-b-choice");
+  assert.equal(h.elements["model-count"].textContent, "1 รุ่น");
+  assert(!h.state.modelCalls.some(call => call.path.endsWith("/model")));
+});
+
+test("automatic catalog failure leaves dialogue usable and allows an explicit reload", async () => {
+  const h = harness({modelAccess: true});
+  h.state.modelRequest = path => path.endsWith("/models") ? {ok: false, status: 502} : undefined;
+  await settle();
+  assert.equal(h.elements["model-count"].hidden, true);
+  assert.equal(h.elements["model-select"].disabled, true);
+  assert.equal(h.elements.scan.disabled, false);
+  assert.match(h.elements["model-status"].textContent, /โหลดรายการไม่สำเร็จ/);
+  h.state.modelRequest = null;
+  await h.elements["model-reload"].click();
+  assert.equal(h.elements["model-select"].children.length, 2);
+  assert.equal(h.elements["model-count"].textContent, "2 รุ่น");
+});
+
+test("a disconnected account offers connection setup without automatically querying its catalog", async () => {
+  const h = harness({modelAccess: true});
+  h.state.modelRequest = path => path.endsWith("/provider/status") ? {ok: true, status: 200, json: async () => ({connected: false, plan_usage_enabled: false, model: null})} : undefined;
+  await settle();
+  assert.equal(h.state.modelCalls.length, 1);
+  assert.match(h.elements["model-status"].textContent, /เชื่อมต่อและอนุญาต/);
+  assert.equal(h.elements["model-settings"].hidden, false);
+  assert.equal(h.elements["model-count"].hidden, true);
 });

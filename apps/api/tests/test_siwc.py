@@ -135,3 +135,18 @@ def test_oauth_csp_allows_only_openai_redirect_origin():
     assert "form-action *" not in csp
     assert "http://auth.openai.com" not in csp
     assert "'unsafe-eval'" not in csp
+
+
+def test_account_catalog_keeps_all_visible_choices_and_provider_order(tmp_path):
+    visible = [{"visibility": "list", "slug": "generated-model-" + str(i), "display_name": "Account choice " + str(i)}
+               for i in [7, 2, 5, 1, 0, 6, 4, 3]]
+    def mock(request):
+        assert request.url.path == "/v1/models"
+        return httpx.Response(200, json={"models": visible + [
+            {"visibility": "hide", "slug": "generated-hidden"},
+            {"visibility": "hidden", "slug": "generated-hidden-legacy"}]})
+    auth = siwc.ChatGPTAuth(CredentialStore(tmp_path), transport=httpx.MockTransport(mock))
+    auth.store.save({"access_token": "generated-test-access", "scopes": [siwc.PERMISSION], "expires_at": time.time() + 300})
+    catalog = asyncio.run(auth.models())
+    assert len(catalog) == 8
+    assert catalog == [{"slug": item["slug"], "display_name": item["display_name"]} for item in visible]

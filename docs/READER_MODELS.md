@@ -5,10 +5,12 @@ the Reader header without changing the Reader roadmap milestone order.
 
 ## Workflow
 
-1. Open Reader. The compact model row reads the gateway's saved selection without
-   calling inference or the provider's model catalog.
-2. Open the model row to load the account's available models. Choose one in the
-   dropdown; it saves immediately after the backend acknowledges it. A **โหลดใหม่**
+1. Open Reader. After checking the saved selection and management pairing, the
+   panel automatically loads the connected account's current model catalog.
+   The model row shows its display name and the number of available choices.
+   This metadata load does not submit inference or change the selected model.
+2. Open the model row to use the already loaded account choices. Choose one in
+   the dropdown; it saves immediately after the backend acknowledges it. A **โหลดใหม่**
    button refreshes the list. Escape closes the picker and focuses its summary.
 3. Existing dialogue, corrections and an unsaved editor remain in place. Selecting
    a model does not submit any images, clear cache or automatically retranslate.
@@ -20,9 +22,10 @@ the Reader header without changing the Reader roadmap milestone order.
    different model's output.
 
 The selection is global to this local, single-user gateway. Another Reader or
-the local Settings page can change it. Focus refreshes the status, and opening
-the picker refreshes the catalog. Slugs are shown until a catalog supplies their
-display names. No speed, quality, vision-support or remaining-quota badges are
+the local Settings page can change it. Focus refreshes the status and account
+catalog; the **โหลดใหม่** button refreshes it explicitly. Opening an already
+loaded picker reuses those choices without another provider request. Slugs are
+shown until the account catalog supplies their display names. No speed, quality, vision-support or remaining-quota badges are
 invented from incomplete catalog metadata.
 
 ## Busy and error behavior
@@ -61,13 +64,13 @@ single-worker local POC assumption.
 
 ## Verification
 
-- Mocked API suite: **120 passed**, one existing dependency deprecation warning.
+- Mocked API suite: **121 passed**, one existing dependency deprecation warning.
   New checks cover management-only access, forbidden origins, catalog privacy,
   successful selection/profile invalidation, stale/concurrent account changes,
   revocation during provider I/O and token-refresh stability. The isolated test
   container has networking disabled and fresh temporary credential storage.
-- Extension wiring and behavior/cache/Settings regressions: **96 passed**,
-  including 14 new model/queue tests. They cover retained dialogue/unsaved edits,
+- Extension wiring and behavior/cache/Settings regressions: **100 passed**,
+  including 18 model/queue/automatic-loading tests. They cover retained dialogue/unsaved edits,
   no automatic inference, mutual exclusion, save failures, legacy/revoked
   credentials, initial-load races, cross-panel profile changes and HTTP 409 queue
   stopping. Syntax, manifest JSON and diff checks pass.
@@ -105,3 +108,33 @@ single-worker local POC assumption.
 6. Test stale selection, permission revocation, gateway offline and a narrow
    panel with large Thai text. Do not include credentials or callback URLs in
    reports. Review and merge remain explicit human actions.
+
+
+## Account-options follow-up
+
+The startup-loading regression was reproduced before the change: the header
+still showed only the saved slug, with no catalog request until the picker was
+opened. It now preloads every returned displayable choice, preserves provider
+order and shows the count. Catalog errors offer explicit reload; disconnected
+accounts and reader-only pairing do not automatically query the provider.
+
+On 2026-10-28 a read-only check of the connected local account's official catalog
+returned HTTP 200 and eight displayable choices. The existing selected model
+was retained, and no inference was submitted. Account model names, credentials
+and the raw live response were not copied into fixtures. Automated completeness
+checks use eight generated model entries plus hidden entries instead.
+
+The display filter remains `visibility == "list"`, as specified by
+[OpenAI Docs: Models and inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference).
+Models hidden by the account catalog are not exposed as selectable choices, and
+no global/static list is used to invent account entitlement.
+
+The running gateway already exposes the required model endpoints. Reload the
+unpacked extension and reopen Reader to load the automatic account choices.
+
+BrowserOS neo also verified the automatic-loading follow-up using eight
+**generated** account choices: all eight options were present before opening the
+picker, the count matched, and no inference was submitted. The count/selection
+controls fit at 280/360/480 px with the translate action visible. This is UI
+verification with generated data; the separate read-only backend check above
+establishes the live account catalog count.

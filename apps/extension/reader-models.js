@@ -4,6 +4,7 @@ class ReaderModelPicker {
     this.onBusyChange = onBusyChange;
     this.picker = document.getElementById("model-picker");
     this.label = document.getElementById("model-current");
+    this.count = document.getElementById("model-count");
     this.select = document.getElementById("model-select");
     this.reload = document.getElementById("model-reload");
     this.status = document.getElementById("model-status");
@@ -16,12 +17,15 @@ class ReaderModelPicker {
     this.loading = false;
     this.saving = false;
     this.canManage = false;
+    this.accountReady = false;
     this.uncertain = false;
     this.message = "กำลังตรวจโมเดล…";
     this.select.addEventListener("change", () => this.save(this.select.value));
     this.reload.addEventListener("click", () => this.loadCatalog());
     this.settings.addEventListener("click", () => chrome.runtime.openOptionsPage());
-    this.picker.addEventListener("toggle", () => { if (this.picker.open) this.loadCatalog(); });
+    this.picker.addEventListener("toggle", () => {
+      if (this.picker.open && !this.version) this.loadCatalog();
+    });
     this.picker.addEventListener("keydown", event => {
       if (event.key === "Escape") { this.picker.open = false; document.getElementById("model-summary").focus(); }
     });
@@ -30,9 +34,11 @@ class ReaderModelPicker {
       if (area !== "local" || (!changes.mangaCapability && !changes.mangaSettingsCapability)) return;
       ++this.epoch;
       this.canManage = false;
+      this.accountReady = false;
       this.version = null;
       this.catalog = [];
       this.selected = null;
+      this.uncertain = false;
       this.message = "การจับคู่เปลี่ยนแล้ว กำลังตรวจสิทธิ์…";
       this.render();
       this.refreshStatus();
@@ -59,6 +65,8 @@ class ReaderModelPicker {
     const selected = this.catalog.find(model => model.slug === this.selected);
     this.label.textContent = this.uncertain ? "ตรวจโมเดลอีกครั้ง" : selected?.display_name || this.selected || "ยังไม่ได้เลือก";
     this.label.title = this.label.textContent;
+    this.count.textContent = this.catalog.length + " รุ่น";
+    this.count.hidden = !this.version || !this.catalog.length;
     this.select.replaceChildren();
     if (!this.catalog.length || !selected) {
       const option = document.createElement("option");
@@ -86,6 +94,8 @@ class ReaderModelPicker {
     if (this.loading || this.saving || this.readerBusy) return;
     const epoch = ++this.epoch;
     this.loading = true;
+    this.version = null;
+    this.accountReady = false;
     this.render();
     try {
       const credentials = await this.credentials();
@@ -104,6 +114,7 @@ class ReaderModelPicker {
       const data = await response.json();
       if (epoch !== this.epoch) return;
       this.selected = typeof data.model === "string" ? data.model : null;
+      this.accountReady = Boolean(data.connected && data.plan_usage_enabled);
       this.version = null;
       this.uncertain = false;
       this.message = !this.canManage ? "การจับคู่เดิมใช้แปลได้ เปิด Settings เพื่ออนุญาตการเปลี่ยนโมเดล"
@@ -118,7 +129,7 @@ class ReaderModelPicker {
       this.loading = false;
       this.render();
       if (epoch !== this.epoch) this.refreshStatus();
-      else if (this.picker.open && this.canManage) this.loadCatalog();
+      else if (this.canManage && this.accountReady) this.loadCatalog();
     }
   }
   async loadCatalog() {
@@ -152,7 +163,8 @@ class ReaderModelPicker {
       this.version = data.version;
       this.canManage = true;
       this.uncertain = false;
-      this.message = data.models.length ? "เลือกแล้วบันทึกทันที ใช้กับการแปลครั้งถัดไป" : "บัญชีนี้ยังไม่มีโมเดลให้เลือก ลองโหลดใหม่หรือเปิด Settings";
+      this.message = data.models.length ? "พบ " + data.models.length + " โมเดลจากบัญชีนี้ เลือกแล้วบันทึกทันที ใช้กับการแปลครั้งถัดไป"
+        : "บัญชีนี้ยังไม่มีโมเดลให้เลือก ลองโหลดใหม่หรือเปิด Settings";
     } catch {
       if (epoch === this.epoch) this.message = "โหลดรายการไม่สำเร็จ คำแปลเดิมยังอยู่ ตรวจการเชื่อมต่อแล้วกดโหลดรายการใหม่";
     } finally {

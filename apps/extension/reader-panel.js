@@ -1,13 +1,12 @@
-/* Non-destructive Side Panel: edits stay local and manga image pixels stay untouched. */
+/* Non-destructive Side Panel: results and edits stay within this page session. */
 const status = document.getElementById("status");
 const items = document.getElementById("items");
 const scanButton = document.getElementById("scan");
 const grantButton = document.getElementById("grant");
-const cache = new Map();
-const rendered = new Set();
+const imagesByUrl = new Map();
 let generation = 0;
-let context = "";
-let running = false;
+let source = null;
+let activeRun = null;
 let pendingPermission = null;
 
 function show(message) { status.textContent = message; }
@@ -19,161 +18,254 @@ function element(tag, className, value) {
 }
 
 async function activeMangaTab() {
-  // The Side Panel does not get a new activeTab grant from its own buttons.
-  // The 'tabs' permission supplies metadata; host permission is requested separately.
+  // A Side Panel click does not grant activeTab; request per-site access separately.
   const [tab] = await chrome.tabs.query({active: true, lastFocusedWindow: true});
-  if (!tab?.id) {
-    throw new Error("ไม่พบแท็บที่กำลังใช้งาน กรุณาเลือกแท็บมังงะในหน้าต่าง Chrome");
-  }
-  if (!tab.url) {
-    throw new Error("อ่าน URL แท็บไม่ได้: Reload ส่วนขยายและตรวจสิทธิ์ tabs ใน chrome://extensions");
-  }
-  if (!/^https?:\/\//.test(tab.url)) {
-    throw new Error("แท็บปัจจุบันไม่ใช่เว็บ http/https: " + tab.url.slice(0, 70));
-  }
+  if (!tab?.id) throw new Error("ไม่พบแท็บที่กำลังใช้งาน กรุณาเลือกแท็บมังงะในหน้าต่าง Chrome");
+  if (!tab.url) throw new Error("อ่าน URL แท็บไม่ได้: Reload ส่วนขยายและตรวจสิทธิ์ tabs ใน chrome://extensions");
+  if (!/^https?:\/\//.test(tab.url)) throw new Error("แท็บปัจจุบันไม่ใช่เว็บ http/https: " + tab.url.slice(0, 70));
   return tab;
 }
 
+function sameSource(a, b) { return a?.id === b?.id && a?.url === b?.url; }
 function clearPendingPermission() {
   pendingPermission = null;
   grantButton.hidden = true;
 }
-
-function render(data) {
-  data.regions.forEach((r, index) => {
-    const card = element("section", "item");
-    const label = element("small", "", "ภาพ " + (data.imageIndex + 1) + " · บทสนทนา " + (index + 1));
-    const original = element("div", "source", r.source_text);
-    const translated = element("div", "translation", r.translated_text);
-    const controls = element("div", "tools");
-    const edit = element("button", "", "แก้คำแปล");
-    const locate = element("button", "", "ไปยังภาพ");
-    edit.addEventListener("click", () => {
-      if (card.querySelector("textarea")) return;
-      const input = document.createElement("textarea");
-      input.value = translated.textContent;
-      const save = element("button", "", "บันทึก");
-      save.addEventListener("click", () => {
-        translated.textContent = input.value;
-        input.remove();
-        save.remove();
-        data.regions[index].translated_text = translated.textContent;
-      });
-      card.append(input, save);
-      input.focus();
-    });
-    locate.addEventListener("click", async () => {
-      try {
-        await chrome.tabs.sendMessage(data.tabId, {type: "MANGA_READER_LOCATE", index: data.imageIndex});
-      } catch {
-        show("ไม่พบภาพต้นฉบับ กรุณาเปิดแท็บมังงะเดิมแล้วลองอีกครั้ง");
-      }
-    });
-    controls.append(edit, locate);
-    card.append(label, original, translated, controls);
-    items.append(card);
-  });
+function reset(message) {
+  ++generation;
+  activeRun = null;
+  source = null;
+  imagesByUrl.clear();
+  clearPendingPermission();
+  items.replaceChildren();
+  scanButton.disabled = false;
+  show(message);
+}
+function current(run) { return activeRun === run && run.generation === generation; }
+async function verifySource(run) {
+  if (!current(run)) return false;
+  let tab;
+  try {
+    tab = await activeMangaTab();
+  } catch {
+    if (current(run)) reset("หน้าต้นทางไม่พร้อมใช้งาน กรุณาเปิดหน้ามังงะแล้วลองอีกครั้ง");
+    return false;
+  }
+  if (!current(run)) return false;
+  if (!sameSource(source, tab)) {
+    reset("เปลี่ยนแท็บหรือหน้าแล้ว กดแปลภาพที่เห็นเพื่อเริ่มบริบทใหม่");
+    return false;
+  }
+  return true;
 }
 
-async function scan() {
-  if (running) return;
-  running = true;
-  const task = ++generation;
+function renderDialogue(record, r, index) {
+  const card = element("section", "item");
+  const label = element("small", "", "บทสนทนา " + (index + 1));
+  const original = element("div", "source", r.source_text);
+  const translated = element("div", "translation", r.translated_text);
+  const controls = element("div", "tools");
+  const edit = element("button", "", "แก้คำแปล");
+  edit.addEventListener("click", () => {
+    if (card.querySelector("textarea")) return;
+    const input = document.createElement("textarea");
+    input.value = translated.textContent;
+    const save = element("button", "", "บันทึก");
+    save.addEventListener("click", () => {
+      translated.textContent = input.value;
+      r.translated_text = input.value;
+      input.remove();
+      save.remove();
+    });
+    card.append(input, save);
+    input.focus();
+  });
+  controls.append(edit);
+  card.append(label, original, translated, controls);
+  record.card.append(card);
+}
+
+function renderImage(record) {
+  record.card.replaceChildren(element("small", "", "ภาพ " + (record.index + 1)));
+  if (record.state === "success") {
+    record.regions.forEach((r, index) => renderDialogue(record, r, index));
+    const locate = element("button", "", "ไปยังภาพ");
+    locate.addEventListener("click", async () => {
+      const epoch = generation;
+      try {
+        const tab = await activeMangaTab();
+        if (epoch !== generation || !sameSource(source, tab)) return;
+        const found = await chrome.tabs.sendMessage(tab.id, {
+          type: "MANGA_READER_LOCATE", url: record.url, pageUrl: tab.url
+        });
+        if (!found && epoch === generation) show("ไม่พบภาพต้นฉบับในหน้านี้แล้ว");
+      } catch {
+        if (epoch === generation) show("ไม่พบภาพต้นฉบับ กรุณาเปิดแท็บมังงะเดิมแล้วลองอีกครั้ง");
+      }
+    });
+    record.card.append(locate);
+  } else {
+    const messages = {queued: "รอแปล", loading: "กำลังแปล", empty: "ไม่พบบทสนทนาที่อ่านได้", error: "แปลไม่สำเร็จ: " + record.error};
+    record.card.append(element("div", "image-status", messages[record.state]));
+    if (record.state === "error") {
+      const retry = element("button", "", "ลองใหม่");
+      retry.disabled = Boolean(activeRun);
+      retry.addEventListener("click", () => scan(record));
+      record.card.append(retry);
+    }
+  }
+}
+function updateRetryButtons() {
+  for (const record of imagesByUrl.values()) if (record.state === "error") renderImage(record);
+}
+function previousContext(record) {
+  // Do not feed later images back into a retry of an earlier image.
+  return [...imagesByUrl.values()].filter(r => r.state === "success" && r.index < record.index)
+    .sort((a, b) => a.index - b.index)
+    .flatMap(r => r.regions.map(row => row.source_text + " => " + row.translated_text))
+    .join(" ").slice(-1500);
+}
+function showSummary() {
+  const records = [...imagesByUrl.values()];
+  const count = state => records.filter(r => r.state === state).length;
+  show("แปลแล้ว " + count("success") + " ภาพ · ไม่พบบทสนทนา " + count("empty") +
+    " · ล้มเหลว " + count("error") + " · เลื่อนหน้าเพื่อแปลภาพถัดไป");
+}
+
+async function translateRecord(run, record) {
+  if (!await verifySource(run) || !current(run)) return;
+  record.state = "loading";
+  record.error = "";
+  renderImage(record);
+  show("กำลังแปลภาพ " + (record.index + 1));
+  let reply;
+  try {
+    reply = await chrome.runtime.sendMessage({
+      type: "MANGA_READER_TRANSLATE", url: record.url, tabId: source.id,
+      pageUrl: source.url, context: previousContext(record)
+    });
+  } catch (error) {
+    reply = {ok: false, error: error.message || String(error)};
+  }
+  if (!await verifySource(run) || !current(run)) return;
+  const regions = reply?.data?.regions;
+  if (!reply?.ok || !Array.isArray(regions) || regions.some(r =>
+    !r || typeof r.source_text !== "string" || typeof r.translated_text !== "string")) {
+    record.state = "error";
+    record.error = reply?.error || "ข้อมูลคำแปลไม่ถูกต้อง กรุณาลองใหม่";
+  } else {
+    record.regions = regions;
+    record.state = regions.length ? "success" : "empty";
+  }
+  renderImage(record);
+}
+
+async function scan(retryRecord = null) {
+  if (activeRun) return;
+  // Capture the generation before the first await, including tab/permission setup.
+  const run = {generation};
+  activeRun = run;
   scanButton.disabled = true;
+  updateRetryButtons();
   try {
     const tab = await activeMangaTab();
+    if (!current(run)) return;
+    if (!sameSource(source, tab)) {
+      reset("เริ่มบริบทสำหรับหน้านี้");
+      source = tab;
+      run.generation = generation;
+      activeRun = run;
+      scanButton.disabled = true;
+      // An old retry must never be applied to another tab or chapter.
+      if (retryRecord) return;
+    }
     const origin = new URL(tab.url).origin;
     const pattern = origin + "/*";
-    if (!await chrome.permissions.contains({origins: [pattern]})) {
-      pendingPermission = {tabId: tab.id, origin, pattern};
+    const allowed = await chrome.permissions.contains({origins: [pattern]});
+    if (!await verifySource(run) || !current(run)) return;
+    if (!allowed) {
+      pendingPermission = {tabId: tab.id, pageUrl: tab.url, pattern, generation};
       grantButton.textContent = "อนุญาตเว็บไซต์ " + new URL(tab.url).hostname;
       grantButton.hidden = false;
       show("ต้องอนุญาตให้ Reader อ่านรูปจากเว็บไซต์นี้ก่อน (เฉพาะโดเมนนี้)");
       return;
     }
     clearPendingPermission();
-
-    try {
-      await chrome.scripting.executeScript({
-        target: {tabId: tab.id},
-        files: ["reader-content.js"]
-      });
-    } catch (error) {
-      throw new Error("เข้าอ่านภาพบนแท็บนี้ไม่ได้: " + (error.message || String(error)));
-    }
-    const images = await chrome.tabs.sendMessage(tab.id, {type: "MANGA_READER_DISCOVER"});
-    if (!Array.isArray(images) || !images.length) {
-      throw new Error("ไม่พบรูปมังงะที่โหลดแล้วในหน้าจอ ลองเลื่อนหน้าให้รูปปรากฏและกดแปลอีกครั้ง");
-    }
-    let added = 0, errors = 0, empty = 0;
-    for (let i = 0; i < images.length; i++) {
-      if (task !== generation) break;
-      const image = images[i];
-      const key = tab.id + ":" + image.url;
-      if (rendered.has(key)) continue;
-      let data = cache.get(key);
-      if (!data) {
-        show("กำลัง OCR/แปล " + (i + 1) + "/" + images.length + " (" + origin + ")");
-        const reply = await chrome.runtime.sendMessage({
-          type: "MANGA_READER_TRANSLATE", url: image.url, tabId: tab.id,
-          context: context.slice(-1500)
-        });
-        if (!reply?.ok) {
-          errors++;
-          show("ภาพ " + (i + 1) + " แปลไม่สำเร็จ: " + (reply?.error || "ไม่ทราบสาเหตุ"));
-          continue;
-        }
-        data = reply.data;
-        cache.set(key, data);
+    let queue;
+    if (retryRecord) {
+      if (imagesByUrl.get(retryRecord.url) !== retryRecord || retryRecord.state !== "error") return;
+      queue = [retryRecord];
+    } else {
+      await chrome.scripting.executeScript({target: {tabId: tab.id}, files: ["reader-content.js"]});
+      if (!await verifySource(run) || !current(run)) return;
+      const images = await chrome.tabs.sendMessage(tab.id, {type: "MANGA_READER_DISCOVER", pageUrl: tab.url});
+      if (!await verifySource(run) || !current(run)) return;
+      if (!Array.isArray(images) || !images.length) {
+        throw new Error("ไม่พบรูปมังงะที่โหลดแล้วในหน้าจอ ลองเลื่อนหน้าให้รูปปรากฏและกดแปลอีกครั้ง");
       }
-      if (!Array.isArray(data.regions) || data.regions.length === 0) {
-        empty++;
-        continue;
+      queue = [];
+      for (const image of images.slice(0, 3)) {
+        if (imagesByUrl.has(image.url)) continue;
+        const record = {...image, state: "queued", regions: [], error: "", card: element("section", "image")};
+        imagesByUrl.set(image.url, record);
+        items.append(record.card);
+        renderImage(record);
+        queue.push(record);
       }
-      data.imageIndex = image.index;
-      data.tabId = tab.id;
-      render(data);
-      rendered.add(key);
-      added += data.regions.length;
-      context = (context + " " + data.regions.map(r =>
-        r.source_text + " => " + r.translated_text).join(" ")).slice(-1500);
     }
-    if (task === generation) {
-      show("เพิ่ม " + added + " บทสนทนา · ภาพ OCR ไม่พบข้อความ " + empty +
-           " · ล้มเหลว " + errors + " · เลื่อนหน้าเพื่อแปลภาพถัดไป");
+    for (const record of queue) {
+      if (!current(run)) break;
+      await translateRecord(run, record);
     }
+    if (current(run)) showSummary();
   } catch (error) {
-    if (task === generation) show(error.message || String(error));
+    if (current(run)) show(error.message || String(error));
   } finally {
-    running = false;
-    scanButton.disabled = false;
+    // An obsolete finally must not unlock controls owned by a newer run.
+    if (current(run)) {
+      activeRun = null;
+      scanButton.disabled = false;
+      updateRetryButtons();
+    }
   }
 }
 
-scanButton.addEventListener("click", scan);
-
-// Chrome requires a direct user gesture for permission requests.
-// Do NOT await chrome.tabs.query before calling permissions.request here.
+scanButton.addEventListener("click", () => scan());
+// permissions.request must run directly in the click handler for Chrome's user gesture.
 grantButton.addEventListener("click", () => {
   const request = pendingPermission;
   if (!request) return;
-  chrome.permissions.request({origins: [request.pattern]}).then(async allowed => {
+  return chrome.permissions.request({origins: [request.pattern]}).then(async allowed => {
+    if (request !== pendingPermission || request.generation !== generation) return;
+    const tab = await activeMangaTab();
+    if (request !== pendingPermission || request.generation !== generation) return;
+    if (tab.id !== request.tabId || tab.url !== request.pageUrl) {
+      reset("เปลี่ยนแท็บหรือหน้าแล้ว กดแปลภาพที่เห็นอีกครั้ง");
+      return;
+    }
     if (!allowed) {
-      show("ยังไม่ได้อนุญาตเว็บไซต์นี้ จึงไม่สามารถ OCR รูปในหน้านี้ได้");
+      show("ยังไม่ได้อนุญาตเว็บไซต์นี้ จึงไม่สามารถอ่านรูปในหน้านี้ได้");
       return;
     }
     clearPendingPermission();
     await scan();
-  }).catch(error => show("ขอสิทธิ์เข้าถึงเว็บไม่สำเร็จ: " + (error.message || error)));
+  }).catch(error => {
+    if (request === pendingPermission && request.generation === generation) show("ขอสิทธิ์เข้าถึงเว็บไม่สำเร็จ: " + (error.message || error));
+  });
 });
 
-document.getElementById("reset").addEventListener("click", () => {
-  ++generation;
-  cache.clear();
-  rendered.clear();
-  context = "";
-  clearPendingPermission();
-  items.replaceChildren();
-  show("เริ่มใหม่แล้ว");
+chrome.tabs.onActivated.addListener(info => {
+  if (source && info.windowId === source.windowId && info.tabId !== source.id) {
+    reset("เปลี่ยนแท็บแล้ว กดแปลภาพที่เห็นเพื่อเริ่มบริบทใหม่");
+  }
 });
+chrome.tabs.onUpdated.addListener((tabId, change) => {
+  if (source?.id === tabId && (change.status === "loading" || (change.url && change.url !== source.url))) {
+    reset("หน้าเปลี่ยนหรือโหลดใหม่แล้ว กดแปลภาพที่เห็นเพื่อเริ่มบริบทใหม่");
+  }
+});
+chrome.tabs.onRemoved.addListener(tabId => {
+  if (source?.id === tabId) reset("ปิดแท็บต้นฉบับแล้ว กรุณาเปิดหน้ามังงะ");
+});
+document.getElementById("reset").addEventListener("click", () => reset("เริ่มใหม่แล้ว"));
 document.getElementById("settings").addEventListener("click", () => chrome.runtime.openOptionsPage());

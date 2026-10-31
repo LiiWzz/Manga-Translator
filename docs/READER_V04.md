@@ -29,7 +29,7 @@ directly; saving keeps dialogue visible and never starts inference by itself.
 - Retry context includes successful earlier images from this page, bounded to 1500 characters, and excludes later images. A correction is included when building context for subsequent requests.
 - Three visible images are processed per click to keep latency and local gateway budgets bounded, not the whole chapter. Lazy-loaded pages require scrolling.
 - Vision accuracy and reading order require human review. Avoiding duplicate dialogue across crop overlaps relies on the prompt; image fetch still uses configured host permissions.
-- No crop-selection UI in this MVP. The optional later iteration can add user-selected crop regions with careful coordinate scaling.
+- The original MVP had no crop-selection UI. The [site compatibility flow](SITE_COMPATIBILITY.md) now adds a confirmed screenshot crop; selection at original-image resolution remains future work.
 - The user reported completing the Chrome Side Panel check on 2026-10-28; see the acceptance record below. PR review and merge approval remain separate.
 
 ## Troubleshooting: panel says เปิดหน้ามังงะก่อน

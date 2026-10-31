@@ -7,6 +7,9 @@ const panel=fs.readFileSync("apps/extension/reader-panel.js","utf8");
 const panelHtml=fs.readFileSync("apps/extension/reader-panel.html","utf8");
 assert(panelHtml.indexOf('src="reader-models.js"') >= 0);
 assert(panelHtml.indexOf('src="reader-models.js"') < panelHtml.indexOf('src="reader-panel.js"'));
+assert(panelHtml.indexOf('src="reader-capture.js"') >= 0);
+assert(panelHtml.indexOf('src="reader-capture.js"') < panelHtml.indexOf('src="reader-panel.js"'));
+assert(bg.includes('importScripts("reader-image-source.js")'));
 const manifest=JSON.parse(fs.readFileSync("apps/extension/manifest.json","utf8"));
 assert.equal(manifest.side_panel.default_path,"reader-panel.html");
 assert(manifest.permissions.includes("sidePanel"));
@@ -24,6 +27,7 @@ console.log("Side Panel action wiring regression passed.");
 require("./test-reader-reliability.cjs");
 require("./test-reader-cache.cjs");
 require("./test-settings.cjs");
-for (const file of ["connection-errors.js", "reader-cache.js", "background.js", "reader-models.js", "reader-panel.js", "options.js", "settings-launch.js"]) {
+require("./test-reader-image-source.cjs");
+for (const file of ["connection-errors.js", "reader-cache.js", "reader-image-source.js", "background.js", "reader-models.js", "reader-capture.js", "reader-panel.js", "options.js", "settings-launch.js"]) {
   new (require("node:vm").Script)(fs.readFileSync("apps/extension/" + file, "utf8"), {filename: file});
 }

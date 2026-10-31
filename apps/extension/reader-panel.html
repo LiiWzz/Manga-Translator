@@ -53,6 +53,18 @@
     </details>
   </header>
   <main class="reader-content" aria-label="คำแปลมังงะ">
+    <section id="capture-preview" class="capture-preview" aria-labelledby="capture-heading" hidden>
+      <h2 id="capture-heading">เลือกพื้นที่แปล</h2>
+      <p id="capture-help">ลากบนภาพเพื่อเลือกเฉพาะส่วนที่ต้องการ ส่งแปลเมื่อกดยืนยันเท่านั้น ใช้ได้กับภาพที่คุณมีสิทธิ์อ่านและแปล</p>
+      <div id="capture-surface" class="capture-surface" tabindex="0" role="group" aria-label="เลือกพื้นที่ในภาพหน้าจอ" aria-describedby="capture-help capture-keys">
+        <img id="capture-image" alt="ภาพหน้าจอสำหรับเลือกพื้นที่แปล" draggable="false">
+        <div id="capture-selection" class="capture-selection" aria-hidden="true"></div>
+      </div>
+      <p id="capture-keys">คีย์บอร์ด: Shift + ลูกศรปรับขนาด · ลูกศรเลื่อนกรอบ · Esc ยกเลิก</p>
+      <p id="capture-size" role="status"></p>
+      <div class="capture-actions"><button id="capture-all" type="button">เลือกทั้งภาพ</button><button id="capture-cancel" type="button">ยกเลิก</button></div>
+      <button id="capture-confirm" class="primary-button" type="button">ส่งพื้นที่ที่เลือกแปล</button>
+    </section>
     <section id="empty-state" class="empty-state">
       <div class="empty-art" aria-hidden="true">
         <svg viewBox="0 0 168 160" fill="none"><rect class="art-back" x="41" y="21" width="94" height="119" rx="12" transform="rotate(9 41 21)"/><rect class="art-page" x="27" y="15" width="99" height="124" rx="12"/><path class="art-line" d="M42 34h31M42 43h20M42 111h57M42 120h36"/><path class="art-bubble" d="M54 59h43a10 10 0 0 1 10 10v14a10 10 0 0 1-10 10H77L64 103V93H54a10 10 0 0 1-10-10V69a10 10 0 0 1 10-10Z"/><text x="57" y="83" class="art-text">ไทย</text><path class="art-spark" d="m132 52 3-8 3 8 8 3-8 3-3 8-3-8-8-3Z"/></svg>
@@ -69,9 +81,11 @@
     <p id="status" class="reader-status" role="status" aria-live="polite" aria-atomic="true">แปลเฉพาะภาพที่เห็น ครั้งละไม่เกิน 3 ภาพ</p>
     <button id="grant" class="permission-button" type="button" hidden>อนุญาตเว็บไซต์</button>
     <button id="scan" class="primary-button" type="button" aria-busy="false"><svg class="icon" aria-hidden="true"><use href="#icon-scan"/></svg><span>แปลภาพที่เห็น</span><span class="button-arrow" aria-hidden="true">→</span></button>
+    <button id="capture" class="capture-button" type="button">เลือกพื้นที่แปลจากหน้าจอ</button>
   </footer>
   <script src="connection-errors.js"></script>
   <script src="reader-models.js"></script>
+  <script src="reader-capture.js"></script>
   <script src="reader-panel.js"></script>
 </body>
 </html>

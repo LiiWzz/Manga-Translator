@@ -2,6 +2,7 @@ const API = "http://127.0.0.1:8000/api/v1/translate-rendered";
 const SUPPORTED_IMAGE_HOSTS = new Set(["cdn.asurascans.com"]);
 const MAX_BYTES = 8 * 1024 * 1024;
 importScripts("reader-cache.js");
+importScripts("connection-errors.js");
 const readerCache = new ReaderCache(chrome.storage.local);
 // Content scripts use messages only; neither cached dialogue nor pairing data
 // needs to be exposed through storage APIs in the page's content-script context.
@@ -98,7 +99,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const response = await fetch("http://127.0.0.1:8000/api/v1/reader/profile", {
         headers: {Authorization: "Bearer " + mangaCapability}, cache: "no-store"
       });
-      if (!response.ok) throw new Error("Reader settings HTTP " + response.status);
+      if (!response.ok) throw await connectionFailure(response);
       fingerprint = (await response.json()).fingerprint;
       if (!/^[a-f0-9]{64}$/.test(fingerprint)) throw new Error("Update the local API before using Reader cache");
       if (message.profile && message.profile !== fingerprint) {
@@ -130,9 +131,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       throw new Error("OCR API is offline at http://127.0.0.1:8000");
     }
     if (!response.ok) {
-      const body = await response.text().catch(() => "");
-      throw Object.assign(new Error("Translation API HTTP " + response.status + ": " + body.slice(0, 180)),
-        {settingsChanged: reader && response.status === 409});
+      throw await connectionFailure(response);
     }
     const data = await response.json();
     if (!reader) return data;
@@ -150,6 +149,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return {...(stored || ReaderCache.data(data)), profile: fingerprint, cache_key: saved ? cacheKey : null,
       cache_epoch: saved ? epoch : null,
       cache_hit: false, cache_warning: saved ? "" : cacheWarning || "แปลแล้ว แต่ไม่ได้บันทึกถาวร"};
-  })().then(data => sendResponse({ok: true, data}), error => sendResponse({ok: false, error: String(error), settingsChanged: Boolean(error.settingsChanged)}));
+  })().then(data => sendResponse({ok: true, data}), error => sendResponse({ok: false, error: String(error),
+    settingsChanged: Boolean(error.settingsChanged), stopQueue: Boolean(error.stopQueue),
+    errorCode: error.code, action: error.action}));
   return true;
 });

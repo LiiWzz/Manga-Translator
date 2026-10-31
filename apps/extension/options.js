@@ -104,6 +104,10 @@ async function refresh() {
       } else if (health.provider !== "chatgpt_oauth") {
         row("summary", "ระบบกำลังใช้ตัวแปลทดสอบหรือผู้ให้บริการอื่น");
         row("next-step", "หากต้องการใช้ ChatGPT ให้ตั้ง TRANSLATOR_PROVIDER=chatgpt_oauth แล้วเริ่มระบบแปลใหม่");
+      } else if (state.reconnect_required) {
+        row("account-state", "ต้องเชื่อมต่อใหม่");
+        row("summary", "การเชื่อมต่อ ChatGPT หมดอายุ");
+        row("next-step", "กดจัดการการเชื่อมต่อ แล้วเลือกเชื่อมต่อบัญชีเดิมอีกครั้ง");
       } else if (!state.connected || !state.plan_usage_enabled) {
         row("summary", "เชื่อมต่อ ChatGPT เป็นขั้นตอนถัดไป");
         row("next-step", "กดจัดการการเชื่อมต่อ แล้วเข้าสู่ระบบและตรวจสอบการอนุญาตใช้แผน ChatGPT");
@@ -111,8 +115,8 @@ async function refresh() {
         row("summary", "เลือกโมเดลอีกขั้นตอนเดียว");
         row("next-step", "กดจัดการการเชื่อมต่อ แล้วเลือกโมเดลที่รองรับภาพจากรายการ");
       } else {
-        row("summary", "พร้อมเริ่มแปล · ตรวจการเชื่อมต่อแล้ว");
-        row("next-step", "กลับไปแท็บมังงะ เปิด Reader แล้วกด “แปลภาพที่เห็น”");
+        row("summary", "ตั้งค่าครบแล้ว · ยังไม่ได้ทดสอบแปลจริง");
+        row("next-step", "กลับไปแท็บมังงะ เปิด Reader แล้วกด “แปลภาพที่เห็น” การแปลจริงอาจใช้โควตาบัญชี");
       }
     } catch {
       if (!current()) return;

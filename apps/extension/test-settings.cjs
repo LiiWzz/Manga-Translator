@@ -100,13 +100,22 @@ test("first use offers pairing with unchecked management consent", async () => {
 
 test("remembered authority shows readable readiness and opens an extension launch tab", async () => {
   const app = await ready({values: remembered()});
-  assert.match(app.el("summary").textContent, /พร้อมเริ่มแปล/);
+  assert.match(app.el("summary").textContent, /ตั้งค่าครบแล้ว.*ยังไม่ได้ทดสอบแปลจริง/);
   assert.equal(app.el("connect").disabled, false);
   assert.equal(app.el("model-state").textContent, "vision-test");
   assert.equal(app.el("pair-section").hidden, true);
   await app.el("connect").emit("click");
   assert.match(app.tabs[0].url, /^chrome-extension:\/\/a+\/settings-launch.html$/);
   assert(!JSON.stringify([...app.elements.values()].map(el => el.textContent)).includes("generated-manager"));
+  assert(!app.calls.some(call => call.path.includes("translate")));
+});
+
+test("terminal refresh failure offers reconnect without claiming readiness or losing pairing", async () => {
+  const app = await ready({values: remembered(), account: {connected: false, plan_usage_enabled: false, reconnect_required: true}});
+  assert.match(app.el("summary").textContent, /หมดอายุ/);
+  assert.match(app.el("next-step").textContent, /เชื่อมต่อบัญชีเดิม/);
+  assert.equal(app.el("connect").disabled, false);
+  assert.equal(app.values.mangaCapability, "generated-reader");
   assert(!app.calls.some(call => call.path.includes("translate")));
 });
 

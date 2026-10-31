@@ -324,3 +324,13 @@ The isolated full API suite now passes 147 tests (one existing dependency
 deprecation warning), with networking disabled and fresh temporary auth storage.
 This is implementation/test evidence; installed Chrome and live OAuth acceptance
 remain pending.
+
+Extension recovery on `fix/settings-connection-recovery` uses the safe API error
+contract in both the model picker and translation worker. Options promotes
+reconnect when needed and labels a configured account as not yet tested with
+inference. Global auth/permission/usage/model failures stop unsent Reader items
+and provide Settings/Usage actions; temporary per-image failures retain their
+existing retry behavior. Provider permission failures do not revoke valid local
+management pairing. Extension regressions pass 111 tests, with JavaScript syntax,
+manifest JSON and diff checks passing. These changes do not submit automatic
+inference or expand permissions.

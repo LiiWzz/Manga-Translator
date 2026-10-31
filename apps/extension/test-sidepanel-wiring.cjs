@@ -24,6 +24,6 @@ console.log("Side Panel action wiring regression passed.");
 require("./test-reader-reliability.cjs");
 require("./test-reader-cache.cjs");
 require("./test-settings.cjs");
-for (const file of ["reader-cache.js", "background.js", "reader-models.js", "reader-panel.js", "options.js", "settings-launch.js"]) {
+for (const file of ["connection-errors.js", "reader-cache.js", "background.js", "reader-models.js", "reader-panel.js", "options.js", "settings-launch.js"]) {
   new (require("node:vm").Script)(fs.readFileSync("apps/extension/" + file, "utf8"), {filename: file});
 }

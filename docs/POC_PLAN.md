@@ -26,6 +26,13 @@ clear-data controls. Its automated checks pass; new manual Chrome acceptance is
 pending. See [persistent-cache behavior and verification](READER_CACHE.md).
 See [Reader behavior and limits](READER_V04.md).
 
+The [connection and model improvement plan](SETTINGS_PAIR_ONCE.md#connection-and-model-improvement-plan)
+records the 2026-10-29 Settings review follow-up: credential/model consistency,
+connection recovery and result-model provenance, delivered as three dependent
+PRs. This work preserves the Reader milestone order below. The backend
+implementation and isolated regressions are recorded in that plan;
+actual-browser acceptance remains pending.
+
 ## Next milestones
 
 Implement in this order on feature branches in the Reader branch stack. Version

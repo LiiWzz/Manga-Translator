@@ -88,6 +88,10 @@ def _friendly_error(title, message, status_code=400):
                         headers=HEADERS)
 
 
+def _provider_failure(exc):
+    return JSONResponse({"detail": exc.public()}, status_code=exc.status, headers=HEADERS)
+
+
 @router.get("/api/v1/settings/status")
 def settings_status(request: Request):
     _management_generation(request)
@@ -115,8 +119,8 @@ async def extension_models(request: Request):
     version = auth.model_selection_version()
     try:
         models = await auth.models()
-    except AuthError:
-        raise HTTPException(status_code=502, detail="Could not load account models")
+    except AuthError as exc:
+        return _provider_failure(exc)
     if generation != _management_generation(request)[1]:
         raise HTTPException(status_code=401, detail="Settings permission changed")
     if version != auth.model_selection_version():
@@ -138,11 +142,12 @@ async def extension_model(request: Request, payload: ModelSelectionBody):
             raise HTTPException(status_code=401, detail="Settings permission changed")
 
     try:
-        await auth.select_model(payload.slug, expected_version=payload.version, authorize=still_authorized)
+        await auth.select_model(payload.slug, expected_version=payload.version, authorize=still_authorized,
+                                commit_lock=security.lock)
     except ModelSelectionChanged:
         raise HTTPException(status_code=409, detail="Account or model changed; reload the model list")
-    except AuthError:
-        raise HTTPException(status_code=502, detail="Could not select model; reload the model list")
+    except AuthError as exc:
+        return _provider_failure(exc)
     return JSONResponse({"model": auth.status()["model"], "version": auth.model_selection_version()}, headers=HEADERS)
 
 
@@ -192,12 +197,19 @@ async def settings(request: Request):
     # Keep the stricter no-referrer policy on OAuth callbacks and sensitive responses.
     catalog, catalog_error = [], False
     state = auth.status() if rec["admin"] else {}
+    version = auth.model_selection_version()
     if state.get("connected") and state.get("plan_usage_enabled"):
         try:
             catalog = await auth.models()
-        except AuthError:
-            catalog_error = True
-    response = HTMLResponse(settings_page(rec, state, catalog, catalog_error),
+        except AuthError as exc:
+            catalog_error = exc.code
+        if not _authorized(rec):
+            raise HTTPException(status_code=403, detail="Settings permission changed")
+        if version != auth.model_selection_version():
+            catalog = []
+            catalog_error = "account_changed"
+        state = auth.status()
+    response = HTMLResponse(settings_page(rec, state, catalog, catalog_error, version=version),
                             headers={**HEADERS, "Referrer-Policy": "same-origin"})
     # Lax permits the authorization server's top-level GET callback to carry the session.
     response.set_cookie("manga_session", sid, httponly=True, samesite="lax",
@@ -230,7 +242,9 @@ async def auth_reconnect(request: Request):
     data = await request.form()
     _record(request, str(data.get("csrf", "")))
     try:
-        url = auth.start(reconnect=True, session_id=request.cookies["manga_session"])
+        status = auth.status()
+        url = auth.start(reconnect=True, session_id=request.cookies["manga_session"],
+                         consent=status["connected"] and not status["plan_usage_enabled"])
         return RedirectResponse(url, status_code=303, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
     except AuthError:
         return _friendly_error("เชื่อมต่อบัญชีเดิมไม่ได้", "กลับไป Settings แล้วเลือกเชื่อมต่อ ChatGPT เพื่อลงชื่อเข้าใช้อีกครั้ง")
@@ -246,7 +260,11 @@ async def auth_callback(request: Request, code: str | None = None, state: str | 
     if not _authorized(rec):
         return _friendly_error("สิทธิ์เปิด Settings หมดอายุ", "เปิดจัดการการเชื่อมต่อจากส่วนขยายอีกครั้ง แล้วเริ่มเข้าสู่ระบบใหม่", 403)
     try:
-        await auth.callback(code, state, client_id, error, session_id=sid)
+        def still_authorized():
+            if not _authorized(_sessions.get(sid)):
+                raise HTTPException(status_code=403, detail="Settings permission changed")
+        await auth.callback(code, state, client_id, error, session_id=sid,
+                            authorize=still_authorized, commit_lock=security.lock)
     except AuthError:
         return _friendly_error("เชื่อมต่อ ChatGPT ไม่สำเร็จ", "การเข้าสู่ระบบอาจถูกยกเลิกหรือหมดเวลา กลับไป Settings แล้วลองเชื่อมต่ออีกครั้ง")
     return RedirectResponse("/settings", status_code=303, headers=HEADERS)
@@ -266,9 +284,16 @@ async def auth_models(request: Request):
 @router.post("/auth/model")
 async def auth_model(request: Request):
     data = await request.form()
-    _record(request, str(data.get("csrf", "")))
+    csrf = str(data.get("csrf", ""))
+    _record(request, csrf)
+    version = str(data.get("version", ""))
+    if len(version) != 64 or any(c not in "0123456789abcdef" for c in version):
+        return _friendly_error("รายการโมเดลหมดอายุ", "กลับไป Settings เพื่อโหลดรายการใหม่ก่อนเลือกโมเดล", 409)
     try:
-        await auth.select_model(str(data.get("slug", "")))
+        await auth.select_model(str(data.get("slug", "")), expected_version=version,
+                                authorize=lambda: _record(request, csrf), commit_lock=security.lock)
+    except ModelSelectionChanged:
+        return _friendly_error("รายการโมเดลเปลี่ยนแล้ว", "มีการเปลี่ยนบัญชีหรือโมเดลจากหน้าอื่น กลับไปโหลดรายการใหม่ก่อนเลือกอีกครั้ง", 409)
     except AuthError:
         return _friendly_error("บันทึกโมเดลไม่สำเร็จ", "รายการโมเดลอาจเปลี่ยนหรือการเชื่อมต่อขัดข้อง โมเดลเดิมยังไม่ถูกเปลี่ยน กลับไปโหลดรายการใหม่แล้วเลือกอีกครั้ง")
     return RedirectResponse("/settings", status_code=303)
@@ -329,9 +354,10 @@ class ExtensionAuthStatus(BaseModel):
     connected: bool
     plan_usage_enabled: bool
     model: str | None
+    reconnect_required: bool
 
 
 @router.get("/api/v1/provider/status", response_model=ExtensionAuthStatus)
 async def provider_status(request: Request, gate=Depends(require_extension_identity)):
     result = auth.status()
-    return JSONResponse({key: result[key] for key in ("connected", "plan_usage_enabled", "model")}, headers=HEADERS)
+    return JSONResponse({key: result[key] for key in ("connected", "plan_usage_enabled", "model", "reconnect_required")}, headers=HEADERS)

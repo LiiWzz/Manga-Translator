@@ -28,6 +28,7 @@ def test_no_invalid_fragments_or_malformed_output(payload):
 
 
 def test_vision_sends_image_without_guessing_coordinates(monkeypatch):
+    monkeypatch.setenv("TRANSLATOR_PROVIDER", "chatgpt_oauth")
     captured = {}
     class FakeAuth:
         async def infer(self, content, instructions=None):
@@ -64,6 +65,7 @@ def test_punctuation_exception_keeps_quality_guards(source, translated):
 
 
 def test_tall_strip_preserves_readable_width_and_overlapping_coverage(monkeypatch):
+    monkeypatch.setenv("TRANSLATOR_PROVIDER", "chatgpt_oauth")
     captured = {}
     async def infer(content, instructions=None):
         captured["content"] = content
@@ -87,6 +89,7 @@ def test_tall_strip_preserves_readable_width_and_overlapping_coverage(monkeypatc
 
 
 def test_excessively_long_strip_is_rejected_before_inference(monkeypatch):
+    monkeypatch.setenv("TRANSLATOR_PROVIDER", "chatgpt_oauth")
     async def infer(*args, **kwargs):
         pytest.fail("Tile limit must be checked before spending model quota")
     monkeypatch.setattr(reader_vision.auth, "infer", infer)

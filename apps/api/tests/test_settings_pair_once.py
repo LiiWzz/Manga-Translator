@@ -1,5 +1,6 @@
 """Pair-once ownership, browser session handoff and Settings UX regressions."""
 import hashlib
+import asyncio
 import re
 import time
 
@@ -235,14 +236,103 @@ def test_dropdown_uses_available_models_and_saves_with_csrf(setup):
     assert '<select id="model" name="slug" required>' in page.text
     assert '<option value="vision-test">Test model</option>' in page.text
     assert "hidden-test" not in page.text
-    response = client.post("/auth/model", data={"csrf": csrf(page), "slug": "vision-test"}, follow_redirects=False)
+    response = client.post("/auth/model", data={"csrf": csrf(page), "slug": "vision-test", "version": account.model_selection_version()}, follow_redirects=False)
     assert response.status_code == 303
     assert account.status()["model"] == "vision-test"
     assert 'value="vision-test" selected' in client.get("/settings").text
-    denied = client.post("/auth/model", data={"csrf": csrf(page), "slug": "not-in-catalog"})
+    denied = client.post("/auth/model", data={"csrf": csrf(page), "slug": "not-in-catalog", "version": account.model_selection_version()})
     assert denied.status_code == 400
     assert "บันทึกโมเดลไม่สำเร็จ" in denied.text
     assert account.status()["model"] == "vision-test"
+
+
+def test_browser_model_form_cannot_overwrite_a_newer_reader_choice(setup):
+    sec, account, client = setup
+    connect(account)
+    page = open_settings(client, pair(sec, client))
+    version = account.model_selection_version()
+    record = account.store.load()
+    record["selected_model"] = "newer-reader-choice"
+    account.store.save(record)
+    result = client.post("/auth/model", data={"csrf": csrf(page), "slug": "vision-test", "version": version})
+    assert result.status_code == 409
+    assert account.status()["model"] == "newer-reader-choice"
+
+
+@pytest.mark.parametrize("change", ["revoke", "re-pair", "expire"])
+def test_browser_model_save_rechecks_authority_after_provider_io(setup, monkeypatch, change):
+    sec, account, client = setup
+    connect(account)
+    page = open_settings(client, pair(sec, client))
+    version = account.model_selection_version()
+    async def models():
+        if change == "expire":
+            oauth_routes._sessions[client.cookies.get("manga_session")]["expires"] = 0
+        elif change == "re-pair":
+            sec.redeem_credentials(sec.issue_pairing(manage_settings=True), allow_settings=True)
+        else:
+            sec.revoke()
+        return [{"slug": "vision-test", "display_name": "Generated model"}]
+    monkeypatch.setattr(account, "models", models)
+    result = client.post("/auth/model", data={"csrf": csrf(page), "slug": "vision-test", "version": version}, follow_redirects=False)
+    assert result.status_code == 403
+    assert account.status()["model"] is None
+
+
+def test_settings_terminal_expiry_promotes_reconnect_with_saved_client_id(setup):
+    from urllib.parse import parse_qs, urlparse
+    sec, account, client = setup
+    connect(account)
+    record = account.store.load()
+    record.update(client_id="oaiapp_generated", subject="generated-account", expires_at=0)
+    account.store.save(record)
+    account.transport = httpx.MockTransport(lambda request: httpx.Response(400, json={"error": "invalid_grant"}))
+    with pytest.raises(siwc.AuthError):
+        asyncio.run(account.access_token())
+    page = open_settings(client, pair(sec, client))
+    assert "ต้องเชื่อมต่อใหม่" in page.text
+    assert '<form method="post" action="/auth/reconnect">' in page.text
+    result = client.post("/auth/reconnect", data={"csrf": csrf(page)}, follow_redirects=False)
+    query = parse_qs(urlparse(result.headers["location"]).query)
+    assert query["client_id"] == ["oaiapp_generated"]
+    assert "prompt" not in query
+
+
+def test_explicit_plan_permission_recovery_reuses_registration_and_requests_consent(setup):
+    from urllib.parse import parse_qs, urlparse
+    sec, account, client = setup
+    connect(account)
+    record = account.store.load()
+    record.update(client_id="oaiapp_generated", subject="generated-account", scopes=["openid"])
+    account.store.save(record)
+    page = open_settings(client, pair(sec, client))
+    assert "อนุญาตใช้แผน ChatGPT" in page.text
+    result = client.post("/auth/reconnect", data={"csrf": csrf(page)}, follow_redirects=False)
+    query = parse_qs(urlparse(result.headers["location"]).query)
+    assert query["client_id"] == ["oaiapp_generated"]
+    assert query["prompt"] == ["consent"]
+    assert siwc.PERMISSION in query["scope"][0].split()
+
+
+def test_callback_rechecks_pairing_after_code_exchange(setup, monkeypatch):
+    sec, account, client = setup
+    connect(account)
+    page = open_settings(client, pair(sec, client))
+    started = client.post("/auth/start", data={"csrf": csrf(page)}, follow_redirects=False)
+    assert started.status_code == 303
+    attempt = account.pending
+    original = account.store.load()
+    async def validate(*args):
+        sec.revoke()
+        return {"sub": "new-generated-account"}
+    monkeypatch.setattr(account, "_validate_id_token", validate)
+    account.transport = httpx.MockTransport(lambda request: httpx.Response(200, json={
+        "access_token": "generated-new", "refresh_token": "generated-new-refresh",
+        "id_token": "generated-id", "scope": siwc.PERMISSION, "expires_in": 3600}))
+    result = client.get("/auth/callback", params={"code": "generated-code", "state": attempt.state,
+                        "client_id": "oaiapp_generated"}, follow_redirects=False)
+    assert result.status_code == 403
+    assert account.store.load() == original
 
 
 def test_model_catalog_failure_has_recovery_and_keeps_selection(setup, monkeypatch):

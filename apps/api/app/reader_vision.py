@@ -17,6 +17,7 @@ from PIL import Image
 
 from .siwc import AuthError, auth
 from .text_quality import clean_translation
+from .provider_config import provider_name
 
 MAX_IMAGE_SIDE = 3000
 IMAGE_OVERLAP = 300
@@ -60,7 +61,15 @@ def cache_profile() -> str:
               saved.get("selected_model"), saved.get("issuer"), saved.get("subject"),
               MAX_IMAGE_SIDE, IMAGE_OVERLAP, MAX_IMAGE_TILES, MAX_IMAGE_DATA_URL_BYTES,
               MAX_DIALOGUES, MAX_SOURCE_LENGTH, MAX_TRANSLATION_LENGTH]
+    # Existing profiles were exclusively OAuth Vision. Retain their cache keys;
+    # every other provider gets its own namespace, including the default demo.
+    if provider_name() != "chatgpt_oauth":
+        inputs.insert(0, provider_name())
     return hashlib.sha256(json.dumps(inputs, ensure_ascii=False).encode()).hexdigest()
+
+
+def translation_model():
+    return "mock-demo" if provider_name() == "mock" else (auth.store.load() or {}).get("selected_model")
 
 
 def prepare_image(image: Image.Image) -> str:
@@ -144,6 +153,13 @@ async def translate_image(image: Image.Image, context: str = "") -> list[dict]:
     """Use an authenticated vision-capable SIWC model; never fallback to noisy OCR."""
     if len(context) > 1500:
         raise AuthError("Dialogue context is too long")
+    provider = provider_name()
+    if provider == "mock":
+        return [{"source_text": "[DEMO] Generated sample; image has not been read",
+                 "translated_text": "[DEMO] ข้อความตัวอย่าง ไม่ใช่คำแปลจากภาพ",
+                 "bbox": None, "confidence": None}]
+    if provider != "chatgpt_oauth":
+        raise AuthError("Reader requires mock or chatgpt_oauth provider", code="unsupported_capability", status=422)
     image_urls = prepare_images(image)
     prompt = (
         "Read and translate the dialogue in the attached manga image. "

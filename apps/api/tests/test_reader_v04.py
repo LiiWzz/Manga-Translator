@@ -51,6 +51,7 @@ def test_reader_rejects_invalid_origin():
 
 
 def test_reader_keeps_translations_when_another_balloon_is_ellipsis(monkeypatch):
+    monkeypatch.setenv("TRANSLATOR_PROVIDER", "chatgpt_oauth")
     from app import reader_vision
     async def infer(*args, **kwargs):
         return ('{"dialogues":[{"source_text":"HELLO THERE","translated_text":"สวัสดี"},'
@@ -68,6 +69,7 @@ def test_reader_keeps_translations_when_another_balloon_is_ellipsis(monkeypatch)
 
 
 def test_reader_logs_safe_validation_reason_without_dialogue_or_image(monkeypatch, caplog):
+    monkeypatch.setenv("TRANSLATOR_PROVIDER", "chatgpt_oauth")
     from app import reader_vision
     async def infer(*args, **kwargs):
         return '{"dialogues":[{"source_text":"PRIVATE COMIC TEXT","translated_text":"still English"}]}'

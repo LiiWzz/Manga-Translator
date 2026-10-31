@@ -66,4 +66,5 @@ class CredentialStore:
         for name in ("access_token", "refresh_token", "id_token", "expires_at"):
             record.pop(name, None)
         record["scopes"] = []
+        record.pop("reconnect_required", None)
         self.save(record)

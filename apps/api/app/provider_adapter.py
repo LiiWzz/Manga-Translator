@@ -10,4 +10,4 @@ async def translate_chatgpt(texts: list[str], context: str = "") -> list[str]:
         return await auth.translate(texts, context=context)
     except AuthError as exc:
         # The error's description has no user token data.
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=exc.status, detail=exc.public()) from exc

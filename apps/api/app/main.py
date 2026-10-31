@@ -5,7 +5,7 @@ import io
 import os
 
 import httpx
-from fastapi import FastAPI, File, HTTPException, UploadFile, Request, Depends
+from fastapi import FastAPI, File, HTTPException, UploadFile, Request, Depends, Form
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel
 
@@ -47,10 +47,10 @@ def extract_regions(image: Image.Image):
     return [(list(r.bbox), r.source_text, r.confidence) for r in extract_grouped_regions(image)]
 
 
-async def translate_texts(texts: list[str]) -> list[str]:
+async def translate_texts(texts: list[str], context: str = "") -> list[str]:
     provider = os.getenv("TRANSLATOR_PROVIDER", "chatgpt_oauth").lower()
     if provider == "chatgpt_oauth":
-        return await translate_chatgpt(texts)
+        return await translate_chatgpt(texts, context=context) if context else await translate_chatgpt(texts)
     if provider == "mock":
         return ["[TH DEMO] " + text for text in texts]
     if provider != "openai":
@@ -142,3 +142,21 @@ async def translate_rendered(file: UploadFile = File(...), debug: bool = False, 
                           provider=os.getenv("TRANSLATOR_PROVIDER","chatgpt_oauth"),
                           overlay_data_url=overlay_data_url(overlay),
                           applied_regions=applied,skipped=skipped,diagnostics=diagnostic)
+
+
+@app.post("/api/v1/reader/translate")
+async def reader_translate(file: UploadFile = File(...), context: str = Form(""), gate=Depends(require_extension)):
+    """Vision-first reading. No synthetic boxes or edits to the original image."""
+    if len(context) > 1500:
+        raise HTTPException(status_code=422, detail="Context exceeds 1500 characters")
+    image = await _decode_image(file)
+    from .reader_vision import translate_image
+    from .siwc import AuthError
+    try:
+        dialogue = await translate_image(image, context)
+    except AuthError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"image_width": image.width, "image_height": image.height,
+            "regions": dialogue,
+            "provider": os.getenv("TRANSLATOR_PROVIDER", "chatgpt_oauth"),
+            "reader_mode": "vision-first"}

@@ -841,6 +841,46 @@ test("opening the picker during the initial status request still loads its catal
   assert(h.state.modelCalls.some(call => call.path.endsWith("/models")));
 });
 
+test("starting translation during startup does not leave the model list empty after the queue finishes", async () => {
+  const h = harness({modelAccess: true}), status = deferred(), translation = deferred();
+  h.state.modelRequest = path => path.endsWith("/provider/status") ? status.promise : undefined;
+  h.state.translate = () => translation.promise;
+  const run = h.scan(); await settle();
+  assert.equal(h.state.calls.length, 1);
+  status.resolve({ok: true, status: 200, json: async () => ({connected: true, plan_usage_enabled: true, model: "vision-a"})});
+  await settle();
+  assert(!h.state.modelCalls.some(call => call.path.endsWith("/models")), "catalog waits for the active queue");
+  translation.resolve(reply()); await run; await settle();
+  assert.equal(h.elements["model-select"].children.length, 2, "startup must resume the deferred catalog load");
+  assert.equal(h.elements["model-select"].disabled, false);
+  assert.equal(h.elements["model-count"].textContent, "2 รุ่น");
+  assert.equal(h.state.calls.length, 1, "loading choices must not trigger translation");
+});
+
+for (const revoked of [false, true]) test("pairing " + (revoked ? "revoked" : "replaced") + " during translation resumes model checks with current authority", async () => {
+  const h = harness({modelAccess: true}), translation = deferred(); await settle();
+  const before = h.state.modelCalls.length;
+  h.state.translate = () => translation.promise;
+  const run = h.scan(); await settle();
+  h.state.credentials = revoked ? {} : {mangaCapability: "generated-new-reader", mangaSettingsCapability: "generated-new-manager"};
+  await h.chrome.storage.onChanged.emit({mangaCapability: {}, mangaSettingsCapability: {}}, "local");
+  await settle();
+  assert.equal(h.elements["model-select"].disabled, true);
+  assert.equal(h.state.modelCalls.length, before, "account checks wait for the active queue");
+  translation.resolve(reply()); await run; await settle();
+  const resumed = h.state.modelCalls.slice(before);
+  if (revoked) {
+    assert.equal(resumed.length, 0, "revoked pairing must not query the catalog with old authority");
+    assert.equal(h.elements["model-select"].disabled, true);
+    assert.match(h.elements["model-status"].textContent, /จับคู่ส่วนขยายก่อน/);
+  } else {
+    assert.deepEqual(resumed.map(call => call.path), ["/api/v1/provider/status", "/api/v1/settings/models"]);
+    assert.equal(resumed[1].options.headers.Authorization, "Bearer generated-new-manager");
+    assert.equal(h.elements["model-select"].disabled, false);
+    assert.equal(h.elements["model-select"].children.length, 2);
+  }
+});
+
 test("a provider-side settings conflict stops the Reader before its next queued inference", async () => {
   const worker = workerHarness(), h = harness();
   worker.inference = () => ({ok: false, status: 409, text: async () => 'Reader settings changed during translation'});

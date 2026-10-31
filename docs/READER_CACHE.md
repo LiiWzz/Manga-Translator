@@ -15,9 +15,10 @@ new extension needs the authenticated `/api/v1/reader/profile` endpoint.
    only after local storage acknowledges it. A failed save leaves the editor
    open; **ยกเลิก** discards an unsaved edit.
 2. Close/reopen the panel, then translate the same visible images. Matching
-   results show **ใช้คำแปลที่บันทึกไว้**, including saved corrections, without
+   results show the **บันทึกไว้** badge, including saved corrections, without
    another inference request.
-3. **เริ่มใหม่** clears the panel and current context, retaining durable data.
+3. Open the top-right Reader menu for **เริ่มใหม่** and **ลบคำแปลที่บันทึกไว้**.
+   **เริ่มใหม่** clears the panel and current context, retaining durable data.
    **ลบคำแปลที่บันทึกไว้** deletes all saved Reader results and corrections across
    pages in this Chrome profile and resets open Reader panels. It preserves
    pairing and other extension preferences.

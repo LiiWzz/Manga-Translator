@@ -4,12 +4,63 @@ const items = document.getElementById("items");
 const scanButton = document.getElementById("scan");
 const grantButton = document.getElementById("grant");
 const clearButton = document.getElementById("clear-cache");
+const emptyState = document.getElementById("empty-state");
+const readingCount = document.getElementById("reading-count");
+const sourceLabel = document.getElementById("source-label");
+const menu = document.getElementById("reader-menu");
+const sourceToggle = document.getElementById("show-source");
+const themeToggle = document.getElementById("theme");
+const smallerButton = document.getElementById("font-smaller");
+const largerButton = document.getElementById("font-larger");
 const imagesByUrl = new Map();
 let generation = 0;
 let source = null;
 let activeRun = null;
 let pendingPermission = null;
 let clearing = false;
+let appearanceTouched = false;
+const appearance = {theme: "light", fontSize: 19, showSource: false};
+
+function applyAppearance() {
+  document.documentElement.dataset.theme = appearance.theme;
+  document.documentElement.dataset.source = appearance.showSource ? "visible" : "hidden";
+  document.documentElement.style.setProperty("--reader-font-size", appearance.fontSize + "px");
+  sourceToggle.setAttribute("aria-pressed", String(appearance.showSource));
+  themeToggle.setAttribute("aria-pressed", String(appearance.theme === "dark"));
+  smallerButton.disabled = appearance.fontSize <= 16;
+  largerButton.disabled = appearance.fontSize >= 25;
+}
+function changeAppearance(change) {
+  appearanceTouched = true;
+  Object.assign(appearance, change);
+  applyAppearance();
+  chrome.storage.local.set({mangaReaderAppearance: {...appearance}}).catch(() => {});
+}
+applyAppearance();
+chrome.storage.local.get("mangaReaderAppearance").then(({mangaReaderAppearance: saved}) => {
+  if (appearanceTouched || !saved) return;
+  if (saved.theme === "dark" || saved.theme === "light") appearance.theme = saved.theme;
+  if (Number.isInteger(saved.fontSize) && saved.fontSize >= 16 && saved.fontSize <= 25) appearance.fontSize = saved.fontSize;
+  if (typeof saved.showSource === "boolean") appearance.showSource = saved.showSource;
+  applyAppearance();
+}).catch(() => {});
+sourceToggle.addEventListener("click", () => changeAppearance({showSource: !appearance.showSource}));
+themeToggle.addEventListener("click", () => changeAppearance({theme: appearance.theme === "light" ? "dark" : "light"}));
+smallerButton.addEventListener("click", () => changeAppearance({fontSize: Math.max(16, appearance.fontSize - 1)}));
+largerButton.addEventListener("click", () => changeAppearance({fontSize: Math.min(25, appearance.fontSize + 1)}));
+
+function updateReaderUi() {
+  const count = [...imagesByUrl.values()].filter(r => r.state === "success").reduce((sum, r) => sum + r.regions.length, 0);
+  emptyState.hidden = imagesByUrl.size > 0;
+  items.hidden = imagesByUrl.size === 0;
+  readingCount.textContent = count ? count + " บทสนทนา" : "พร้อมอ่าน";
+  sourceLabel.textContent = source ? new URL(source.url).hostname : "เลือกแท็บมังงะเพื่อเริ่มอ่าน";
+}
+function setScanDisabled(disabled) {
+  scanButton.disabled = disabled;
+  scanButton.setAttribute("aria-busy", String(disabled));
+  items.setAttribute("aria-busy", String(Boolean(activeRun)));
+}
 
 function show(message) { status.textContent = message; }
 function element(tag, className, value) {
@@ -40,7 +91,8 @@ function reset(message) {
   imagesByUrl.clear();
   clearPendingPermission();
   items.replaceChildren();
-  scanButton.disabled = clearing;
+  setScanDisabled(clearing);
+  updateReaderUi();
   show(message);
 }
 function current(run) { return activeRun === run && run.generation === generation; }
@@ -63,56 +115,78 @@ async function verifySource(run) {
 
 function renderDialogue(record, r, index) {
   const card = element("section", "item");
-  const label = element("small", "", "บทสนทนา " + (index + 1));
-  const original = element("div", "source", r.source_text);
-  const translated = element("div", "translation", r.translated_text);
-  const controls = element("div", "tools");
-  const edit = element("button", "", "แก้คำแปล");
+  const heading = element("div", "dialogue-heading");
+  const label = element("small", "dialogue-number", String(index + 1).padStart(2, "0"));
+  label.setAttribute("aria-label", "บทสนทนา " + (index + 1));
+  const original = element("p", "source", r.source_text);
+  const originalGroup = element("div", "source-group");
+  originalGroup.append(element("small", "source-label", "ต้นฉบับอังกฤษ"), original);
+  const translated = element("p", "translation", r.translated_text);
+  const edit = element("button", "edit-button", "แก้คำแปล");
   edit.addEventListener("click", () => {
     if (activeRun) { show("รอแปลภาพในคิวให้เสร็จก่อนแก้คำแปล"); return; }
     if (card.querySelector("textarea")) return;
+    const editor = element("div", "editor");
     const input = document.createElement("textarea");
+    input.setAttribute("aria-label", "แก้คำแปลบทสนทนา " + (index + 1));
+    input.maxLength = 1000;
     input.value = translated.textContent;
-    const save = element("button", "", "บันทึก");
-    const cancel = element("button", "", "ยกเลิก");
-    cancel.addEventListener("click", () => { input.remove(); save.remove(); cancel.remove(); });
+    const save = element("button", "save-button", "บันทึก");
+    const cancel = element("button", "cancel-button", "ยกเลิก");
+    const actions = element("div", "editor-actions");
+    const errorMessage = element("p", "editor-error");
+    errorMessage.setAttribute("role", "status");
+    errorMessage.hidden = true;
+    const close = () => { editor.remove(); translated.hidden = false; edit.disabled = false; edit.focus(); };
+    const fail = message => { errorMessage.textContent = message; errorMessage.hidden = false; show(message); };
+    cancel.addEventListener("click", close);
     save.addEventListener("click", async () => {
       const epoch = generation, key = record.cacheKey, text = input.value;
       if (!key || !text.trim() || text.length > 1000) {
-        show("ยังบันทึกไม่ได้: ต้องมีคำแปลที่บันทึกไว้ และข้อความไม่เกิน 1000 ตัวอักษร");
+        fail("ยังบันทึกไม่ได้: ต้องมีคำแปลที่บันทึกไว้ และข้อความไม่เกิน 1000 ตัวอักษร");
         return;
       }
       save.disabled = true;
       cancel.disabled = true;
+      errorMessage.hidden = true;
       try {
         const reply = await chrome.runtime.sendMessage({type: "MANGA_READER_SAVE_EDIT", key, index, text, epoch: record.cacheEpoch});
         if (epoch !== generation || imagesByUrl.get(record.url) !== record || record.cacheKey !== key) return;
         if (!reply?.ok) throw new Error(reply?.error || "บันทึกคำแก้ไขไม่สำเร็จ กรุณาลองอีกครั้ง");
         translated.textContent = text;
         r.translated_text = text;
-        input.remove();
-        save.remove();
-        cancel.remove();
+        close();
         show("บันทึกคำแก้ไขในเครื่องแล้ว");
       } catch (error) {
-        if (epoch === generation) show(error.message || String(error));
+        if (epoch === generation) fail(error.message || String(error));
       } finally { save.disabled = false; cancel.disabled = false; }
     });
-    card.append(input, save, cancel);
+    actions.append(save, cancel);
+    editor.append(input, errorMessage, actions);
+    card.append(editor);
+    translated.hidden = true;
+    edit.disabled = true;
     input.focus();
   });
-  controls.append(edit);
-  card.append(label, original, translated, controls);
+  heading.append(label, edit);
+  card.append(heading, translated, originalGroup);
   record.card.append(card);
 }
 
 function renderImage(record) {
-  record.card.replaceChildren(element("small", "", "ภาพ " + (record.index + 1)));
-  if (record.cacheHit) record.card.append(element("small", "", " · ใช้คำแปลที่บันทึกไว้"));
-  if (record.notice) record.card.append(element("div", "image-status", record.notice));
+  record.card.dataset.state = record.state;
+  const heading = element("header", "image-heading");
+  heading.append(element("h2", "image-title", "ภาพ " + (record.index + 1)));
+  if (record.state === "success") heading.append(element("span", "image-count", record.regions.length + " บทสนทนา"));
+  if (record.cacheHit && (record.state === "success" || record.state === "empty")) {
+    const badge = element("span", "image-badge", "บันทึกไว้");
+    badge.setAttribute("title", "ใช้คำแปลที่บันทึกไว้");
+    heading.append(badge);
+  }
+  record.card.replaceChildren(heading);
+  if (record.notice) record.card.append(element("div", "image-notice", record.notice));
   if (record.state === "success") {
-    record.regions.forEach((r, index) => renderDialogue(record, r, index));
-    const locate = element("button", "", "ไปยังภาพ");
+    const locate = element("button", "locate-button", "ไปยังภาพ");
     locate.addEventListener("click", async () => {
       const epoch = generation;
       try {
@@ -126,17 +200,19 @@ function renderImage(record) {
         if (epoch === generation) show("ไม่พบภาพต้นฉบับ กรุณาเปิดแท็บมังงะเดิมแล้วลองอีกครั้ง");
       }
     });
-    record.card.append(locate);
+    heading.append(locate);
+    record.regions.forEach((r, index) => renderDialogue(record, r, index));
   } else {
     const messages = {queued: "รอแปล", loading: "กำลังแปล", empty: "ไม่พบบทสนทนาที่อ่านได้", error: "แปลไม่สำเร็จ: " + record.error};
     record.card.append(element("div", "image-status", messages[record.state]));
     if (record.state === "error") {
-      const retry = element("button", "", "ลองใหม่");
+      const retry = element("button", "retry-button", "ลองใหม่");
       retry.disabled = Boolean(activeRun);
       retry.addEventListener("click", () => scan(record));
       record.card.append(retry);
     }
   }
+  updateReaderUi();
 }
 function updateRetryButtons() {
   for (const record of imagesByUrl.values()) if (record.state === "error") renderImage(record);
@@ -151,8 +227,10 @@ function previousContext(record) {
 function showSummary() {
   const records = [...imagesByUrl.values()];
   const count = state => records.filter(r => r.state === state).length;
-  show("แปลแล้ว " + count("success") + " ภาพ · ไม่พบบทสนทนา " + count("empty") +
-    " · ล้มเหลว " + count("error") + " · เลื่อนหน้าเพื่อแปลภาพถัดไป");
+  const parts = ["แปลแล้ว " + count("success") + " ภาพ"];
+  if (count("empty")) parts.push("ไม่พบข้อความ " + count("empty") + " ภาพ");
+  if (count("error")) parts.push("ล้มเหลว " + count("error") + " ภาพ");
+  show(parts.join(" · "));
 }
 
 async function translateRecord(run, record) {
@@ -193,7 +271,7 @@ async function scan(retryRecord = null) {
   // Capture the generation before the first await, including tab/permission setup.
   const run = {generation};
   activeRun = run;
-  scanButton.disabled = true;
+  setScanDisabled(true);
   updateRetryButtons();
   try {
     const tab = await activeMangaTab();
@@ -201,9 +279,10 @@ async function scan(retryRecord = null) {
     if (!sameSource(source, tab)) {
       reset("เริ่มบริบทสำหรับหน้านี้");
       source = tab;
+      updateReaderUi();
       run.generation = generation;
       activeRun = run;
-      scanButton.disabled = true;
+      setScanDisabled(true);
       // An old retry must never be applied to another tab or chapter.
       if (retryRecord) return;
     }
@@ -259,7 +338,7 @@ async function scan(retryRecord = null) {
     // An obsolete finally must not unlock controls owned by a newer run.
     if (current(run)) {
       activeRun = null;
-      scanButton.disabled = false;
+      setScanDisabled(false);
       updateRetryButtons();
     }
   }
@@ -316,7 +395,7 @@ clearButton.addEventListener("click", async () => {
   finally {
     clearing = false;
     clearButton.disabled = false;
-    scanButton.disabled = Boolean(activeRun);
+    setScanDisabled(Boolean(activeRun));
   }
 });
 chrome.storage.onChanged.addListener((changes, area) => {
@@ -326,3 +405,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
 });
 document.getElementById("settings").addEventListener("click", () => chrome.runtime.openOptionsPage());
+for (const id of ["settings", "reset", "clear-cache"]) {
+  document.getElementById(id).addEventListener("click", () => { menu.open = false; });
+}
+menu.addEventListener("keydown", event => {
+  if (event.key === "Escape") { menu.open = false; menu.querySelector("summary")?.focus(); }
+});
+updateReaderUi();

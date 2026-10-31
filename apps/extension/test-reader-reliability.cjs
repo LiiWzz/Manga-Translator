@@ -24,6 +24,9 @@ class Element {
     this.disabled = false;
     this.value = "";
     this.ownText = "";
+    this.dataset = {};
+    this.attributes = {};
+    this.style = {setProperty(name, value) { this[name] = value; }};
   }
   set textContent(value) { this.ownText = String(value); this.children = []; }
   get textContent() { return this.ownText + this.children.map(el => el.textContent).join(" "); }
@@ -31,6 +34,8 @@ class Element {
   replaceChildren(...children) { this.ownText = ""; this.children = []; this.append(...children); }
   remove() { this.parent.children = this.parent.children.filter(el => el !== this); }
   focus() {}
+  setAttribute(name, value) { this.attributes[name] = String(value); }
+  getAttribute(name) { return this.attributes[name] ?? null; }
   addEventListener(name, fn) { (this.listeners[name] ||= []).push(fn); }
   async click() {
     if (!this.disabled) await Promise.all((this.listeners.click || []).map(fn => fn()));
@@ -38,9 +43,12 @@ class Element {
   querySelector(tag) { return descendants(this).find(el => el.tagName === tag) || null; }
 }
 function descendants(el) { return el.children.flatMap(child => [child, ...descendants(child)]); }
-function harness() {
-  const elements = Object.fromEntries(["status", "items", "scan", "grant", "reset", "settings", "clear-cache"].map(id => [id, new Element()]));
+function harness({savedAppearance} = {}) {
+  const elements = Object.fromEntries(["status", "items", "scan", "grant", "reset", "settings", "clear-cache",
+    "empty-state", "reading-count", "source-label", "reader-menu", "show-source", "theme", "font-smaller", "font-larger"].map(id => [id, new Element()]));
+  const root = new Element("html");
   const state = {
+    savedAppearance,
     tab: {id: 1, windowId: 1, url: "https://reader.example/chapter/1"},
     images: [{index: 0, url: "https://reader.example/1.png"}],
     calls: [],
@@ -59,7 +67,10 @@ function harness() {
     },
     permissions: {contains: () => state.permission(), request: () => state.requestPermission()},
     scripting: {executeScript: () => state.inject()},
-    storage: {onChanged: event()},
+    storage: {onChanged: event(), local: {
+      get: async () => ({mangaReaderAppearance: state.savedAppearance}),
+      set: async ({mangaReaderAppearance}) => { state.savedAppearance = mangaReaderAppearance; }
+    }},
     runtime: {
       sendMessage: message => {
         if (message.type !== "MANGA_READER_TRANSLATE") return state.mutate ? state.mutate(message) : Promise.resolve({ok: true});
@@ -70,10 +81,10 @@ function harness() {
     }
   };
   vm.runInNewContext(fs.readFileSync("apps/extension/reader-panel.js", "utf8"), {
-    chrome, URL, document: {getElementById: id => elements[id], createElement: tag => new Element(tag)}
+    chrome, URL, document: {documentElement: root, getElementById: id => elements[id], createElement: tag => new Element(tag)}
   });
   return {
-    state, chrome, elements,
+    state, chrome, elements, root,
     scan: () => elements.scan.click(),
     reset: () => elements.reset.click(),
     text: () => elements.items.textContent,
@@ -460,7 +471,7 @@ test("reopening the panel restores a correction without another inference", asyn
   second.state.translate = message => restarted.send(message);
   await second.scan();
   assert.match(second.text(), /คำแก้ที่อยู่ข้ามครั้ง/);
-  assert.match(second.text(), /ใช้คำแปลที่บันทึกไว้/);
+  assert.match(second.text(), /บันทึกไว้/);
   assert.equal(restarted.fetched.filter(url => url.endsWith("/translate")).length, 0);
 });
 
@@ -529,4 +540,60 @@ test("a revoked pairing cannot reuse cached dialogue through a failed profile ch
   worker.profileResponse = {ok: false, status: 401};
   assert.equal((await worker.send()).ok, false);
   assert.equal(worker.fetched.filter(url => url.endsWith("/translate")).length, 1);
+});
+
+test("reading controls change appearance without requesting translation", async () => {
+  const h = harness();
+  await h.elements["show-source"].click();
+  await h.elements.theme.click();
+  await h.elements["font-larger"].click();
+  assert.equal(h.root.dataset.source, "visible");
+  assert.equal(h.root.dataset.theme, "dark");
+  assert.equal(h.root.style["--reader-font-size"], "20px");
+  assert.equal(h.elements["show-source"].getAttribute("aria-pressed"), "true");
+  assert.equal(h.state.calls.length, 0);
+  assert.equal(h.state.savedAppearance.fontSize, 20);
+});
+
+test("font controls respect bounds and stored appearance is restored", async () => {
+  const h = harness({savedAppearance: {theme: "dark", fontSize: 25, showSource: true}});
+  await settle();
+  assert.equal(h.root.dataset.theme, "dark");
+  assert.equal(h.root.dataset.source, "visible");
+  assert.equal(h.elements["font-larger"].disabled, true);
+  for (let i = 0; i < 15; i++) await h.elements["font-smaller"].click();
+  assert.equal(h.root.style["--reader-font-size"], "16px");
+  assert.equal(h.elements["font-smaller"].disabled, true);
+});
+
+test("invalid saved appearance values cannot break reading layout", async () => {
+  const h = harness({savedAppearance: {theme: "unknown", fontSize: 900, showSource: "yes"}});
+  await settle();
+  assert.equal(h.root.dataset.theme, "light");
+  assert.equal(h.root.dataset.source, "hidden");
+  assert.equal(h.root.style["--reader-font-size"], "19px");
+});
+
+test("empty state and dialogue count follow results and reset", async () => {
+  const h = harness();
+  assert.equal(h.elements["empty-state"].hidden, false);
+  assert.equal(h.elements.items.hidden, true);
+  await h.scan();
+  assert.equal(h.elements["empty-state"].hidden, true);
+  assert.equal(h.elements["reading-count"].textContent, "1 บทสนทนา");
+  assert.equal(h.elements["source-label"].textContent, "reader.example");
+  assert.equal(h.elements.scan.getAttribute("aria-busy"), "false");
+  await h.reset();
+  assert.equal(h.elements["empty-state"].hidden, false);
+  assert.equal(h.elements.items.hidden, true);
+});
+
+test("reset from the menu closes it without deleting saved dialogue", async () => {
+  const h = harness();
+  h.elements["reader-menu"].open = true;
+  let mutations = 0;
+  h.state.mutate = async () => { mutations++; return {ok: true}; };
+  await h.reset();
+  assert.equal(h.elements["reader-menu"].open, false);
+  assert.equal(mutations, 0);
 });

@@ -836,3 +836,37 @@ test("a disconnected account offers connection setup without automatically query
   assert.equal(h.elements["model-settings"].hidden, false);
   assert.equal(h.elements["model-count"].hidden, true);
 });
+
+test("returning focus to an open model picker keeps its native select usable and options intact", async () => {
+  const h = harness({modelAccess: true}), pending = deferred(); await settle(); await h.openModels();
+  const option = h.elements["model-select"].children[0], callCount = h.state.modelCalls.length;
+  h.state.modelRequest = path => path.endsWith("/models") ? pending.promise : undefined;
+  const focus = h.state.windowEvents.focus.emit();
+  await settle();
+  try {
+    assert.equal(h.elements["model-select"].disabled, false, "native select focus must not start a disabling reload");
+    assert.equal(h.elements["model-select"].children[0], option, "keep native popup options attached");
+    assert.equal(h.state.modelCalls.length, callCount);
+  } finally {
+    pending.resolve({ok: true, status: 200, json: async () => ({models: h.state.catalog, model: h.state.model, version: h.state.modelVersion})});
+    await focus;
+  }
+});
+
+test("opening Reader actions closes the model picker and opening models closes Reader actions", async () => {
+  const h = harness({modelAccess: true}); await settle(); await h.openModels();
+  h.elements["reader-menu"].open = true;
+  await h.elements["reader-menu"].emit("toggle");
+  assert.equal(h.elements["model-picker"].open, false, "model controls must not cover the actions menu");
+  await h.openModels();
+  assert.equal(h.elements["reader-menu"].open, false, "only one Reader header disclosure may be open");
+});
+
+test("an unchanged model render keeps native option elements attached", async () => {
+  const h = harness({modelAccess: true}); await settle(); await h.openModels();
+  const first = h.elements["model-select"].children[0];
+  // Reset with no in-flight work refreshes controls but must not rebuild choices.
+  await h.reset();
+  assert.equal(h.elements["model-select"].children[0], first);
+  assert.equal(h.elements["model-select"].disabled, false);
+});

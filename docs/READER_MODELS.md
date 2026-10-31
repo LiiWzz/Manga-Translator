@@ -10,7 +10,7 @@ the Reader header without changing the Reader roadmap milestone order.
    The model row shows its display name and the number of available choices.
    This metadata load does not submit inference or change the selected model.
 2. Open the model row to use the already loaded account choices. Choose one in
-   the dropdown; it saves immediately after the backend acknowledges it. A **โหลดใหม่**
+   the inline list; it saves immediately after the backend acknowledges it. A **โหลดใหม่**
    button refreshes the list. Escape closes the picker and focuses its summary.
 3. Existing dialogue, corrections and an unsaved editor remain in place. Selecting
    a model does not submit any images, clear cache or automatically retranslate.
@@ -23,8 +23,9 @@ the Reader header without changing the Reader roadmap milestone order.
 
 The selection is global to this local, single-user gateway. Another Reader or
 the local Settings page can change it. Focus refreshes the status and account
-catalog; the **โหลดใหม่** button refreshes it explicitly. Opening an already
-loaded picker reuses those choices without another provider request. Slugs are
+catalog while the chooser is closed; the **โหลดใหม่** button refreshes it explicitly. Opening an already
+loaded picker reuses those choices without another provider request. Focus
+returning to an open chooser keeps its options enabled and attached. Slugs are
 shown until the account catalog supplies their display names. No speed, quality, vision-support or remaining-quota badges are
 invented from incomplete catalog metadata.
 
@@ -69,8 +70,8 @@ single-worker local POC assumption.
   successful selection/profile invalidation, stale/concurrent account changes,
   revocation during provider I/O and token-refresh stability. The isolated test
   container has networking disabled and fresh temporary credential storage.
-- Extension wiring and behavior/cache/Settings regressions: **100 passed**,
-  including 18 model/queue/automatic-loading tests. They cover retained dialogue/unsaved edits,
+- Extension wiring and behavior/cache/Settings regressions: **103 passed**,
+  including 21 model/queue/automatic-loading/control regressions. They cover retained dialogue/unsaved edits,
   no automatic inference, mutual exclusion, save failures, legacy/revoked
   credentials, initial-load races, cross-panel profile changes and HTTP 409 queue
   stopping. Syntax, manifest JSON and diff checks pass.
@@ -86,9 +87,9 @@ single-worker local POC assumption.
   account model availability, vision compatibility or live translation quality.
   Keep the stacked PR Draft until actual Chrome acceptance and review.
 
-| Select and save | Continue reading |
+| Inline model choices | Reader actions |
 | --- | --- |
-| ![Model picker](assets/reader-model-picker-light.png) | ![Reader model row](assets/reader-model-picker-dark.png) |
+| ![Inline choices](assets/reader-controls-inline.png) | ![Unobstructed actions](assets/reader-actions-menu.png) |
 
 ## Actual Chrome acceptance
 
@@ -138,3 +139,36 @@ picker, the count matched, and no inference was submitted. The count/selection
 controls fit at 280/360/480 px with the translate action visible. This is UI
 verification with generated data; the separate read-only backend check above
 establishes the live account catalog count.
+
+
+## Focus and overlapping-menu correction
+
+The reported unclickable selector reproduced in three regressions before the
+fix: returning focus to an open chooser disabled the select and detached its
+options; an idle render recreated option nodes; both Reader disclosures could
+remain open. Browser hit testing confirmed that the model summary/panel covered
+Settings, reset and clear-data buttons in the actions menu.
+
+Focus now refreshes account metadata only while the model section is closed.
+Explicit reload remains available inside it. Ordinary control updates retain
+option elements unless the actual catalog/placeholder changes. Existing
+translation/save/authentication gates still disable selection when required.
+
+The chooser uses an inline, scrollable single-select list (`size=5`) rather than
+a nested operating-system popup. Its section stays in document flow, above the
+reading area. Opening either header disclosure closes the other, and Reader
+actions have an explicit stacking order above the rest of the header.
+
+BrowserOS neo clicked an actual visible option to save a new generated model,
+then used ArrowDown and End to choose further models. The saved label/value
+changed and inference stayed at zero during selection. Returning focus kept
+the options attached/enabled without new requests. Settings received a real
+pointer click, and hit testing reached Settings/reset/clear-data at widths
+280/320/360/480 px. The inline choices did not overlap the reading area; no
+horizontal overflow occurred and the translate action remained visible,
+including 25 px Thai text. Screenshots use generated data only.
+
+The three previously failing control regressions now pass within the 103-test
+extension suite. The 121 mocked API tests, JS syntax, manifest and diff checks
+pass. Actual installed Chrome acceptance still requires reloading the unpacked
+extension and reopening Reader. The gateway and existing pairing do not change.

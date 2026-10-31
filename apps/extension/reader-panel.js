@@ -430,8 +430,9 @@ for (const id of ["settings", "reset", "clear-cache"]) {
 menu.addEventListener("keydown", event => {
   if (event.key === "Escape") { menu.open = false; menu.querySelector("summary")?.focus(); }
 });
+menu.addEventListener("toggle", () => { if (menu.open) modelPicker?.close(); });
 updateReaderUi();
-modelPicker = new ReaderModelPicker({onBusyChange: () => {
+modelPicker = new ReaderModelPicker({onOpen: () => { menu.open = false; }, onBusyChange: () => {
   setScanDisabled(Boolean(activeRun) || clearing);
   updateRetryButtons();
 }});

@@ -1,11 +1,61 @@
-<!doctype html><html><head><meta charset="utf-8"><title>Manga Translator Settings</title>
-<style>body{font:15px/1.5 system-ui;max-width:600px;margin:30px auto;padding:16px}
-button{padding:10px 14px;margin:8px 5px 8px 0}pre{white-space:pre-wrap}</style></head>
-<body><h1>Manga Translator Settings</h1>
-<p>Connect ChatGPT using the local gateway. Access and refresh tokens never enter Chrome extension storage.</p>
-<button id="connect">Open ChatGPT connection settings</button>
-<p><label>One-time pairing code <input id="pair-code" type="password" autocomplete="off"></label><button id="pair">Pair extension</button><button id="unpair">Forget local capability</button></p>
-<p><label><input type="checkbox" id="debug"> Show OCR and skipped-region debug boxes</label></p>
-<button id="check">Check connection</button>
-<pre id="status" role="status">Checking connection...</pre>
-<script src="options.js"></script></body></html>
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ตั้งค่า · Manga Thai Reader</title>
+  <link rel="stylesheet" href="settings.css">
+</head>
+<body>
+<main>
+  <header><span class="eyebrow">MANGA THAI READER</span><h1>ตั้งค่า</h1><p class="muted">เชื่อมต่อครั้งเดียว แล้วกลับไปอ่านได้เลย</p></header>
+  <section class="card" aria-labelledby="connection-heading">
+    <div class="section-heading"><h2 id="connection-heading">การเชื่อมต่อ</h2><button id="check" type="button" class="quiet">ตรวจอีกครั้ง</button></div>
+    <p id="summary" class="badge" role="status" aria-live="polite">กำลังตรวจการเชื่อมต่อ…</p>
+    <dl class="status-list">
+      <div><dt>ระบบแปลในเครื่อง</dt><dd id="gateway-state">กำลังตรวจ…</dd></div>
+      <div><dt>ส่วนขยาย</dt><dd id="pair-state">ยังไม่ได้ตรวจ</dd></div>
+      <div id="account-row" hidden><dt>บัญชี ChatGPT</dt><dd id="account-state">ยังไม่ได้ตรวจ</dd></div>
+      <div id="permission-row" hidden><dt>สิทธิ์ใช้แผน ChatGPT</dt><dd id="permission-state">ยังไม่ได้ตรวจ</dd></div>
+      <div id="model-row" hidden><dt>โมเดลที่เลือก</dt><dd id="model-state">ยังไม่ได้ตรวจ</dd></div>
+    </dl>
+    <p id="next-step" class="muted">รอสักครู่</p>
+    <button id="connect" type="button" class="primary" hidden disabled>จัดการการเชื่อมต่อ</button>
+    <p class="fine-print">ตรวจสถานะโดยไม่ส่งภาพไปแปล และยังไม่ยืนยันการแปลจริงหรือโควตาคงเหลือ</p>
+  </section>
+  <section class="card" id="offline-help" hidden>
+    <h2>เปิดระบบแปลในเครื่อง</h2>
+    <p>เปิด Docker แล้วรันคำสั่งนี้ในโฟลเดอร์โปรเจกต์ จากนั้นกด “ตรวจอีกครั้ง”</p>
+    <code>docker compose up -d api</code>
+  </section>
+  <section class="card" id="pair-section" hidden aria-labelledby="pair-heading">
+    <h2 id="pair-heading">จับคู่กับเครื่องนี้</h2>
+    <p>รันคำสั่งนี้ใน Terminal ของเครื่องคุณ แล้วนำรหัสมากรอกด้านล่าง ใช้ได้ครั้งเดียวภายใน 10 นาที</p>
+    <div class="command"><code id="pair-command">docker compose exec api python -m app.local_security pair</code><button id="copy-command" type="button" class="quiet">คัดลอกคำสั่ง</button></div>
+    <p class="fine-print">การจับคู่สำเร็จจะแทนที่ส่วนขยายที่จับคู่ไว้เดิม โดยยังเก็บบัญชีและคำแปลไว้</p>
+    <form id="pair-form">
+      <label for="pair-code">รหัสจับคู่ชั่วคราว</label>
+      <input id="pair-code" type="password" autocomplete="off" spellcheck="false" maxlength="128" placeholder="XXXX-XXXX-XXXX-XXXX" required aria-describedby="pair-help">
+      <p id="pair-help" class="fine-print">ไม่ต้องสร้างหรือเก็บ Local admin key</p>
+      <label class="consent"><input id="allow-settings" type="checkbox" required><span>อนุญาตให้ส่วนขยายนี้แปลและจัดการการเชื่อมต่อ ChatGPT ในเครื่องนี้ โดยจำสิทธิ์ไว้จนกว่าจะยกเลิกการจับคู่</span></label>
+      <button id="pair" type="submit" class="primary">จับคู่และจำเครื่องนี้</button>
+    </form>
+  </section>
+  <p id="status" role="status" aria-live="polite" class="feedback"></p>
+  <details class="card" id="advanced">
+    <summary>ขั้นสูงและแก้ปัญหา</summary>
+    <p>การออกจากบัญชี ChatGPT และเปลี่ยนโมเดลทำได้ใน “จัดการการเชื่อมต่อ”</p>
+    <button id="re-pair" type="button">จับคู่ใหม่หรือเพิ่มสิทธิ์จัดการ Settings</button>
+    <details class="danger-zone"><summary>ยกเลิกการจับคู่ส่วนขยายนี้</summary>
+      <p>ส่วนขยายจะแปลและเปิด Settings ไม่ได้จนกว่าจะจับคู่ใหม่ บัญชี ChatGPT และคำแปลที่บันทึกไว้ยังอยู่</p>
+      <button id="unpair" type="button" class="danger">ยืนยันยกเลิกการจับคู่</button>
+      <button id="forget" type="button" class="quiet" hidden>ลืมสิทธิ์เฉพาะในเบราว์เซอร์นี้</button>
+      <p id="forget-help" class="fine-print" hidden>ใช้เมื่อระบบแปลเข้าไม่ได้ สิทธิ์ฝั่งระบบและหน้า Settings ที่เปิดไว้ยังไม่ถูกถอน ให้จับคู่ใหม่เมื่อระบบกลับมาเพื่อแทนที่สิทธิ์เดิม</p>
+    </details>
+    <details><summary>เครื่องมือสำหรับ overlay รุ่นเดิม</summary><label class="consent"><input type="checkbox" id="debug"><span>แสดงกรอบ OCR และพื้นที่ที่ข้าม ใช้กับ overlay รุ่นเดิมเท่านั้น</span></label></details>
+  </details>
+  <footer>ข้อมูลเข้าสู่ระบบ ChatGPT อยู่ในระบบแปลในเครื่อง · คำแปลและค่าการอ่านเก็บในเบราว์เซอร์นี้</footer>
+</main>
+<script src="options.js"></script>
+</body>
+</html>

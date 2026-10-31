@@ -20,7 +20,7 @@ def admin_session(monkeypatch, tmp_path):
     monkeypatch.setattr(oauth_routes, "security", sec)
     client = local_client()
     response = client.get("/settings")
-    assert "Settings locked" in response.text
+    assert "ยังไม่ได้อนุญาตการตั้งค่า" in response.text
     csrf = response.text.split('name="csrf" value="')[1].split('"')[0]
     assert client.post("/auth/unlock", data={"csrf": csrf, "key": key}, follow_redirects=False).status_code == 303
     return sec, client, csrf

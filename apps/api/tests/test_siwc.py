@@ -117,7 +117,7 @@ def test_settings_locked_and_csp():
     client = TestClient(app, base_url="http://127.0.0.1:8000")
     page = client.get("/settings")
     assert page.status_code == 200
-    assert "Settings locked" in page.text
+    assert "ยังไม่ได้อนุญาตการตั้งค่า" in page.text
     assert client.get("/auth/models").status_code == 403
     assert client.post("/auth/start", data={"csrf": "invalid"}, follow_redirects=False).status_code == 403
 

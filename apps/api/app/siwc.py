@@ -41,6 +41,10 @@ class AuthError(Exception):
     """Safe to display: never include authorization codes or credentials."""
 
 
+class ModelSelectionChanged(AuthError):
+    """The account or model changed after the client loaded its catalog."""
+
+
 @dataclass(frozen=True)
 class Attempt:
     state: str
@@ -261,11 +265,24 @@ class ChatGPTAuth:
                                "display_name": model.get("display_name", model["slug"])})
         return result
 
-    async def select_model(self, slug: str):
+    def model_selection_version(self, record=None):
+        record = (self.store.load() or {}) if record is None else record
+        identity = [record.get(key) for key in ("issuer", "subject", "client_id", "email", "selected_model")]
+        identity += [sorted(record.get("scopes", [])), bool(record.get("access_token") or record.get("refresh_token"))]
+        return hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode()).hexdigest()
+
+    async def select_model(self, slug: str, *, expected_version=None, authorize=None):
         catalog = await self.models()
         if slug not in {m["slug"] for m in catalog}:
             raise AuthError("Model is not available to this ChatGPT account")
         record = self.store.load()
+        if not record or (expected_version is not None and not hmac.compare_digest(
+                expected_version, self.model_selection_version(record))):
+            raise ModelSelectionChanged("Account or model changed; reload the model list")
+        # The caller may recheck local authority after network I/O. No await
+        # between the final account/version/authority checks and the write.
+        if authorize is not None:
+            authorize()
         record["selected_model"] = slug
         self.store.save(record)
 

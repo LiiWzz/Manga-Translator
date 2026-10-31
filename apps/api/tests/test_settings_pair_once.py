@@ -304,3 +304,111 @@ def test_settings_session_expiry_requires_reopening_from_extension(setup):
     assert client.post("/auth/start", data={"csrf": csrf(page)}, follow_redirects=False).status_code == 403
     assert "ยังไม่ได้อนุญาตการตั้งค่า" in client.get("/settings").text
     assert "เชื่อมต่อ ChatGPT" in open_settings(client, credentials).text
+
+
+def test_extension_catalog_and_model_change_require_management_authority(setup, monkeypatch):
+    sec, account, client = setup
+    connect(account, "previous-test")
+    legacy = pair(sec, client, management=False)
+    reader_headers = {"origin": ORIGIN, "authorization": "Bearer " + legacy["token"]}
+    assert client.get("/api/v1/settings/models", headers=reader_headers).status_code == 401
+    assert client.post("/api/v1/settings/model", headers=reader_headers, json={"slug": "vision-test", "version": "a" * 64}).status_code == 401
+    credentials = pair(sec, client)
+    response = client.get("/api/v1/settings/models", headers=headers(credentials))
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json()["models"] == [{"slug": "vision-test", "display_name": "Test model"}]
+    assert set(response.json()) == {"models", "model", "version"}
+    assert all(value not in response.text for value in ["generated-test-access", "generated-test-refresh", "reader@example.invalid", *credentials.values()])
+    from app import reader_vision
+    monkeypatch.setattr(reader_vision, "auth", account)
+    previous = reader_vision.cache_profile()
+    selected = client.post("/api/v1/settings/model", headers=headers(credentials),
+                           json={"slug": "vision-test", "version": response.json()["version"]})
+    assert selected.status_code == 200
+    assert selected.headers["cache-control"] == "no-store"
+    assert selected.json()["model"] == "vision-test"
+    assert selected.json()["version"] != response.json()["version"]
+    assert reader_vision.cache_profile() != previous
+    assert sec.requests == [] and sec.inflight == 0
+
+
+@pytest.mark.parametrize("origin", [None, "null", HOST, "https://evil.invalid", "http://127.0.0.1:9000"])
+def test_extension_model_routes_deny_foreign_origins(setup, origin):
+    sec, account, client = setup
+    connect(account)
+    credentials = pair(sec, client)
+    request_headers = {"authorization": "Bearer " + credentials["settings_token"]}
+    if origin is not None:
+        request_headers["origin"] = origin
+    assert client.get("/api/v1/settings/models", headers=request_headers).status_code == 403
+    assert client.post("/api/v1/settings/model", headers=request_headers,
+                       json={"slug": "vision-test", "version": "a" * 64}).status_code == 403
+
+
+def test_invalid_model_does_not_change_saved_selection(setup):
+    sec, account, client = setup
+    connect(account, "previous-test")
+    credentials = pair(sec, client)
+    result = client.post("/api/v1/settings/model", headers=headers(credentials),
+                         json={"slug": "not-in-catalog", "version": account.model_selection_version()})
+    assert result.status_code == 502
+    assert account.status()["model"] == "previous-test"
+
+
+def test_stale_model_selection_cannot_overwrite_another_settings_page(setup):
+    sec, account, client = setup
+    connect(account, "previous-test")
+    credentials = pair(sec, client)
+    version = account.model_selection_version()
+    record = account.store.load()
+    record["selected_model"] = "chosen-elsewhere"
+    account.store.save(record)
+    result = client.post("/api/v1/settings/model", headers=headers(credentials),
+                         json={"slug": "vision-test", "version": version})
+    assert result.status_code == 409
+    assert account.status()["model"] == "chosen-elsewhere"
+
+
+@pytest.mark.parametrize("operation", ["catalog", "save"])
+def test_account_change_during_model_fetch_rejects_stale_operation(setup, monkeypatch, operation):
+    sec, account, client = setup
+    connect(account, "previous-test")
+    credentials = pair(sec, client)
+    version = account.model_selection_version()
+    async def models():
+        record = account.store.load()
+        record["subject"] = "changed-generated-account"
+        account.store.save(record)
+        return [{"slug": "vision-test", "display_name": "Test model"}]
+    monkeypatch.setattr(account, "models", models)
+    result = (client.get("/api/v1/settings/models", headers=headers(credentials)) if operation == "catalog" else
+              client.post("/api/v1/settings/model", headers=headers(credentials), json={"slug": "vision-test", "version": version}))
+    assert result.status_code == 409
+    assert account.status()["model"] == "previous-test"
+
+
+@pytest.mark.parametrize("operation", ["catalog", "save"])
+def test_revocation_during_model_fetch_rechecks_authority_before_return_or_write(setup, monkeypatch, operation):
+    sec, account, client = setup
+    connect(account, "previous-test")
+    credentials = pair(sec, client)
+    version = account.model_selection_version()
+    async def models():
+        sec.revoke()
+        return [{"slug": "vision-test", "display_name": "Test model"}]
+    monkeypatch.setattr(account, "models", models)
+    result = (client.get("/api/v1/settings/models", headers=headers(credentials)) if operation == "catalog" else
+              client.post("/api/v1/settings/model", headers=headers(credentials), json={"slug": "vision-test", "version": version}))
+    assert result.status_code == 401
+    assert account.status()["model"] == "previous-test"
+
+
+def test_refreshing_tokens_does_not_invalidate_model_selection_version(setup):
+    _, account, _ = setup
+    connect(account, "vision-test")
+    version = account.model_selection_version()
+    record = account.store.load()
+    record.update(access_token="generated-rotated-access", refresh_token="generated-rotated-refresh", expires_at=time.time() + 5000)
+    account.store.save(record)
+    assert account.model_selection_version() == version

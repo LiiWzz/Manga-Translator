@@ -101,6 +101,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!response.ok) throw new Error("Reader settings HTTP " + response.status);
       fingerprint = (await response.json()).fingerprint;
       if (!/^[a-f0-9]{64}$/.test(fingerprint)) throw new Error("Update the local API before using Reader cache");
+      if (message.profile && message.profile !== fingerprint) {
+        throw Object.assign(new Error("โมเดลหรือการตั้งค่าเปลี่ยนแล้ว กดลองใหม่เพื่อใช้การตั้งค่าปัจจุบัน"), {settingsChanged: true});
+      }
       cacheKey = await digest(JSON.stringify([
         "reader-cache-1", message.pageUrl, await digest(await blob.arrayBuffer()),
         fingerprint, String(message.context || "").slice(0, 1500)
@@ -112,7 +115,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       await readerSource(message, sender);
       if (epoch && await readerCache.begin() !== epoch) throw new Error("Saved Reader data was cleared; scan again");
-      if (saved) return {...saved, cache_key: cacheKey, cache_epoch: epoch, cache_hit: true};
+      if (saved) return {...saved, profile: fingerprint, cache_key: cacheKey, cache_epoch: epoch, cache_hit: true};
     }
     const form = new FormData();
     form.append("file", blob, "panel.webp");
@@ -128,11 +131,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     if (!response.ok) {
       const body = await response.text().catch(() => "");
-      throw new Error("Translation API HTTP " + response.status + ": " + body.slice(0, 180));
+      throw Object.assign(new Error("Translation API HTTP " + response.status + ": " + body.slice(0, 180)),
+        {settingsChanged: reader && response.status === 409});
     }
     const data = await response.json();
     if (!reader) return data;
-    if (data.profile !== fingerprint) throw new Error("Reader settings changed; scan again");
+    if (data.profile !== fingerprint) throw Object.assign(new Error("Reader settings changed; scan again"), {settingsChanged: true});
     await readerSource(message, sender);
     let saved = false, stored;
     if (epoch) {
@@ -143,9 +147,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       catch { cacheWarning = "แปลแล้ว แต่บันทึกถาวรไม่สำเร็จ กรุณาตรวจพื้นที่จัดเก็บ"; }
     }
-    return {...(stored || ReaderCache.data(data)), cache_key: saved ? cacheKey : null,
+    return {...(stored || ReaderCache.data(data)), profile: fingerprint, cache_key: saved ? cacheKey : null,
       cache_epoch: saved ? epoch : null,
       cache_hit: false, cache_warning: saved ? "" : cacheWarning || "แปลแล้ว แต่ไม่ได้บันทึกถาวร"};
-  })().then(data => sendResponse({ok: true, data}), error => sendResponse({ok: false, error: String(error)}));
+  })().then(data => sendResponse({ok: true, data}), error => sendResponse({ok: false, error: String(error), settingsChanged: Boolean(error.settingsChanged)}));
   return true;
 });

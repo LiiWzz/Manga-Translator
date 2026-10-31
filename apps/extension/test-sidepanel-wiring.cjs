@@ -4,6 +4,9 @@ const fs = require("node:fs");
 const assert = require("node:assert/strict");
 const bg=fs.readFileSync("apps/extension/background.js","utf8");
 const panel=fs.readFileSync("apps/extension/reader-panel.js","utf8");
+const panelHtml=fs.readFileSync("apps/extension/reader-panel.html","utf8");
+assert(panelHtml.indexOf('src="reader-models.js"') >= 0);
+assert(panelHtml.indexOf('src="reader-models.js"') < panelHtml.indexOf('src="reader-panel.js"'));
 const manifest=JSON.parse(fs.readFileSync("apps/extension/manifest.json","utf8"));
 assert.equal(manifest.side_panel.default_path,"reader-panel.html");
 assert(manifest.permissions.includes("sidePanel"));
@@ -21,6 +24,6 @@ console.log("Side Panel action wiring regression passed.");
 require("./test-reader-reliability.cjs");
 require("./test-reader-cache.cjs");
 require("./test-settings.cjs");
-for (const file of ["reader-cache.js", "background.js", "reader-panel.js", "options.js", "settings-launch.js"]) {
+for (const file of ["reader-cache.js", "background.js", "reader-models.js", "reader-panel.js", "options.js", "settings-launch.js"]) {
   new (require("node:vm").Script)(fs.readFileSync("apps/extension/" + file, "utf8"), {filename: file});
 }

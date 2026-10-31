@@ -14,6 +14,13 @@ remembers separate translation and Settings permissions. Normal use no longer
 requires an admin key. Thai connection status and a model dropdown replace raw
 JSON and model-slug copying. Real Chrome acceptance of this flow is pending.
 
+The [Reader model picker](docs/READER_MODELS.md) builds on that Settings branch.
+The current model is visible in the Reader header; open it to load account models
+and select a new one without leaving the panel. Selection saves immediately,
+preserves displayed dialogue and unsaved edits, and applies to the next explicit
+translation. Controls prevent changing models during this panel's queue or
+starting translation during a model save. Real Chrome acceptance is pending.
+
 ## Requirements
 
 - Docker Desktop / Docker Engine
@@ -25,8 +32,8 @@ JSON and model-slug copying. Real Chrome acceptance of this flow is pending.
 
 ```sh
 git fetch origin
-git switch feat/settings-pair-once
-git pull origin feat/settings-pair-once
+git switch feat/reader-model-picker
+git pull origin feat/reader-model-picker
 ```
 
 Check `.env`, or create it with `cp .env.example .env`. Make sure it contains:
